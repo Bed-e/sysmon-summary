@@ -1,0 +1,3 @@
+# Your own Active Directory / internal DNS suffixes, one per line, e.g.
+# corp.example.com
+# Names ending in these are never sent out (reason: dns_internal).
