@@ -19,7 +19,7 @@ HIGHEST local score in its tree (not a sum). Portal scores are shown beside
 the local score and are never merged into it (design.md section 6).
 """
 
-from scoring import build_process_scores
+from scoring.processes import build_process_scores
 
 NOT_REQUESTED = "not requested"
 

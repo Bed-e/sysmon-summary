@@ -22,7 +22,7 @@ It is a **triage helper, not a verdict engine**. It never says "clean" or "safe"
 These rules apply to every file and every milestone.
 
 1. **Function-based Python as much as possible.** Plain functions, dicts, lists, tuples, sets and strings. No classes unless the standard library forces one on us.
-2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it), `python-dotenv` (reads the portal URLs from a gitignored `.env`, approved by Bed-e) and `python-evtx` (a binary `.evtx` file cannot be read without it). Flask is allowed from milestone M5 only. Anything else needs Bed-e's approval first.
+2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it), `python-dotenv` (reads the portal URLs from a gitignored `.env`, approved by Bed-e) and `python-evtx` (a binary `.evtx` file cannot be read without it). NiceGUI (with the FastAPI and uvicorn it brings) is allowed from milestone M5 only, approved by Bed-e for the tabbed web page: it gives tabs, tables with Show more, dialogs, timers and upload from plain Python functions. Anything else needs Bed-e's approval first.
 3. **Ask Bed-e before any decision that needs structures or patterns above beginner-intermediate level.** Examples: classes and dataclasses, `async`, threads and thread pools, decorators, generators beyond a simple loop, type-hint tricks, regex that is hard to read, and metaprogramming. Claude stops and asks. It does not decide on its own, even if the choice looks better.
 4. If a function is hard to explain in a sentence or two, it is split or simplified.
 5. Data passed between steps is a plain dict or a list of dicts, so it can be printed and read.
@@ -248,18 +248,15 @@ Success `200` (always, for a valid name, even when every source failed):
   - a table of skipped IOCs with reason codes, so the analyst can audit the filter
   - how many IOCs were found, skipped, looked up and left un-enriched because of the cap
   - a fixed note that the scores are not a verdict
-- **M5, Flask web app.** The analyst uploads a dump in a browser and sees the same report. It reuses the same functions. The web part only handles the upload, the enrich button and showing the page.
-  - **No API is called by default.** Uploading a dump parses, filters and ranks it locally and shows the ranked table. Every IOC shows "not requested" in the portal column.
-  - **Enrich on demand.** A plain HTML form has a dropdown for N and an "Enrich top N" button. N is limited to the lookup cap (`DEFAULT_CAP`). Pressing the button sends only the N highest-ranked IOCs to the portals. IOCs outside the top N are never sent.
+- **M5, NiceGUI web app.** The analyst uploads a dump in a browser and sees the same data in five tabs: Overview (counts and the enrich controls), IOCs (the ranked table), Storylines (the M4 process chains), Timeline (one row per process in tree order, children indented under their parent; a bar from each process's first to last event coloured by its local score; dots for its events coloured by event type; dashed lines linking a parent to each child it started. A "Show" dropdown picks flagged processes and their parents (the default), one of the top 20 storylines, or all processes. A table of flagged processes in order of first appearance sits under the chart) and Skipped (the filter audit). It reuses the same functions. The IOC table, the storylines and the skipped table show 10 rows first and a Show more button adds 10 more. The IOC table's "why" is a short, readable phrase per reason, grouped by process, with the full reasons on hover. Each storyline shows a one-line summary (processes, flagged processes, portal hits, network, files, registry writes, time span) and opens to the flagged processes, portal hits and a "Full details" block with the process tree.
+  - **No API is called by default.** Uploading a dump parses, filters and ranks it locally and shows the ranked table on the IOCs tab. Every IOC shows "not requested" in the portal column.
+  - **Enrich on demand.** A dropdown for N (5, 10, 25, 50, 100, all) and an "Enrich next N" button on the Overview tab. Each press sends the N highest-ranked IOCs that have not been tried yet, so pressing it twice with N=5 covers ranks 1-5, then 6-10. A failed lookup counts as tried. Each row of the IOC table also has a Look up button (Retry after a failure) that sends that one IOC. The browser sends only N or the row's rank number. Results from every run are kept; a retry replaces the earlier answer.
   - **One background thread.** The button starts a single thread (approved by Bed-e, M5 only) that runs the same sequential `for` loop as M3, one lookup at a time, highest rank first. The thread exists only so the web request returns at once. Calls are still not parallel.
-  - **The page fills in as answers arrive, without JavaScript.** While the thread runs, the page carries a `<meta http-equiv="refresh">` tag, so the browser reloads it every few seconds and each reload shows the answers so far. When the thread finishes, the tag is left out and the reloading stops.
+  - **The page fills in as answers arrive, with no page reload.** While the thread runs, a NiceGUI timer (every 2 seconds) updates the status line, the counts and the portal column in place. When the thread finishes the timer stops and the storylines are rebuilt once so the answers appear inside them.
   - **Shared state.** The ranked list, the results so far and the run state ("idle", "running", "done", "failed") live in a module-level dict keyed by an upload id. Only the thread writes results. The page only reads. The browser never sends IOC values back, so the server only ever looks up IOCs it ranked itself.
   - **Failures stay visible.** A lookup that fails is shown as "not enriched" with the reason, as in M3. If the thread itself crashes, the run state becomes "failed" with the error text, and the page stops reloading.
-  - Only one enrich run per upload at a time. Pressing the button while one is running does nothing. Enrichment in the web app works as follows:
-  - **No API is called by default.** Upload gives the local ranking only. Every IOC shows "not requested".
-  - **On demand.** A dropdown (5, 10, 25, 50, 100, all) and an "Enrich top N" button send the N most suspicious IOCs to the portals. There is no fixed cap (`--cap` and `DEFAULT_CAP` stay for the command line only).
-  - **Live fill-in.** The browser runs a plain JavaScript loop (no libraries) that asks the server for one IOC at a time (`POST /enrich/<upload_id>/<rank>`) and fills in each row as its answer arrives. The server keeps the ranked list in memory and never accepts IOC values from the browser. A Stop button cancels the rest. The loop is sequential, so rule 6 in section 9 still holds.
-  - **Rate-limit protection.** Only hash lookups reach VirusTotal, so only they are counted. Before sending, the page counts the hash lookups in the top N and warns if they would exceed the limits (time needed at the per-minute rate, share of the daily budget), and the analyst chooses Send anyway or Cancel. The loop spaces hash lookups to stay under the per-minute limit. The server keeps a daily count of hash lookups in a small file, so a restart does not reset it, and once the daily budget is used up it answers "not enriched: daily VirusTotal budget reached" without calling the portal (a hard stop, even if the warning is bypassed). Every hash call is counted, even if the portal answered from its own cache, because the tool cannot see that.
+  - Only one enrich run per upload at a time. Pressing a button while one is running does nothing. The dropdown offers 5, 10, 25, 50, 100 and all; a value above the number of ranked IOCs is clamped. `--cap` and `DEFAULT_CAP` stay for the command line only.
+  - **Rate-limit protection, server side.** Only hash lookups reach VirusTotal, so only they are counted. When the top N holds hash lookups that would exceed the limits (time needed at the per-minute rate, share of the daily budget), the server shows a dialog with Send anyway and Cancel before any lookup starts. The thread spaces hash lookups to stay under the per-minute limit. The server keeps a daily count of hash lookups in a small gitignored file (`data/hash_usage.txt`), so a restart does not reset it. Once the daily budget is used up, a hash lookup is answered "not enriched: daily VirusTotal budget reached" without calling the portal (a hard stop, even after Send anyway). Every hash call is counted, even if the portal answered from its own cache, because the tool cannot see that.
   - **Limits file.** The limits live in `data/api_limits.txt`, not in the code, so they can follow the analyst's real VirusTotal key. Defaults: 4 per minute and 500 per day (VirusTotal free public API; to be checked against the analyst's key, and a premium key has higher limits). The monthly limit is not tracked.
 
 ## 8. Architecture and file layout
@@ -271,13 +268,19 @@ Small flat modules, each with plain functions:
 | `parse.py` | read the `.evtx`, return event dicts |
 | `iocs.py` | collect and de-duplicate IOCs |
 | `filters.py` | skip rules |
-| `scoring.py` | local ranking signals |
+| `scoring/` | local ranking signals |
 | `enrich.py` | call the three APIs, convert answers to the common shape |
 | `storylines.py` | build process chains from `ProcessGuid` |
 | `report.py` | write the HTML |
 | `main.py` | command line: dump in, report out |
-| `web/app.py` | the Flask app, the enrich thread and its shared state (M5 only) |
+| `web/app.py` | the NiceGUI entry point: registers the routes and starts the server (M5 only) |
+| `web/pages.py`, `web/upload.py`, `web/actions.py` | the two pages, the upload endpoint, and the buttons' actions (M5 only) |
+| `web/tabs/` | one module per tab: Overview, IOCs, Storylines, Timeline, Skipped (M5 only) |
+| `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | the enrich thread, the hash limits and daily count, and the shared state (M5 only) |
+| `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, table rows, storyline summaries and timeline data for the tabs; no UI code (M5 only) |
+| `web/config.py` | the web app's constants, columns and colours (M5 only) |
 | `data/api_limits.txt` | per-minute and per-day hash lookup limits for the web app (M5 only) |
+| `data/hash_usage.txt` | today's hash lookup count, written by the web app, gitignored (M5 only) |
 
 ## 9. Decisions, each with its reason
 
@@ -309,5 +312,5 @@ Each is done when its stated result works on the sample dumps used as test fixtu
 - **M2 Filter and rank.** Each IOC has a skip reason or a local score with reasons, including the two persistence signals, with tests for every rule.
 - **M3 Enrich.** The tool queries the three portals one IOC at a time, highest score first, up to the cap, and shows failures as not enriched.
 - **M4 Storylines and static HTML.** One HTML report is written, with ranked process chains and the skipped-items table.
-- **M5 Flask web app.** A dump uploaded in the browser gives the same report, with no API called until the analyst picks N and presses the button. The top N IOCs are then looked up one at a time by a background thread, and the page fills in as answers arrive. No API is called until the analyst presses the button and picks N. Results fill in row by row, with a warning before sending and a hard daily stop for VirusTotal-backed hash lookups, using the limits in `data/api_limits.txt`.
+- **M5 NiceGUI web app.** A dump uploaded in the browser gives the same data in tabs (Overview, IOCs, Storylines, Timeline, Skipped), with no API called until the analyst presses "Enrich next N" or a row's Look up button. Those IOCs are then looked up one at a time by a background thread, and the page fills in as answers arrive. No API is called until the analyst presses the button and picks N. Results fill in row by row, with a warning before sending and a hard daily stop for VirusTotal-backed hash lookups, using the limits in `data/api_limits.txt`.
 - **Later, only with approval.** Parallel calls, a cache of our own, other IOC types.

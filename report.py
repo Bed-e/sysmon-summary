@@ -232,13 +232,18 @@ def build_skipped_table(skipped):
     return "\n".join(lines)
 
 
-def build_report(path, iocs, skipped, ranked, results, cap, storylines):
+def build_report(path, iocs, skipped, ranked, results, cap, storylines,
+                 extra_head="", extra_body=""):
     """Assemble the whole report page.
 
     Input: path, the .evtx file name; iocs from collect_iocs; skipped from
     split_iocs; ranked from rank_iocs; results from enrich_ranked ([] when
     not run); cap, the lookup cap; storylines, the dict from
-    storylines.build_storylines.
+    storylines.build_storylines; extra_head, HTML put at the end of <head>
+    (M5 uses it for the refresh tag); extra_body, HTML put right after the
+    not-a-verdict note (M5 uses it for the enrich controls). Both default to
+    "" so M4 output is unchanged. They are NOT escaped: the caller must pass
+    only HTML it built itself.
     Output: one complete HTML document as a string: title, the fixed
     not-a-verdict note, the counts, the ranked storylines, the skipped table.
     Used by: main.py (M4) and web/app.py (M5).
@@ -250,10 +255,11 @@ def build_report(path, iocs, skipped, ranked, results, cap, storylines):
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8">',
         "<title>Sysmon summary: %s</title>" % escape_text(path),
-        "<style>%s</style></head><body>" % STYLE,
+        "<style>%s</style>%s</head><body>" % (STYLE, extra_head),
         "<h1>Sysmon summary</h1>",
         "<p>File: <code>%s</code></p>" % escape_text(path),
         '<p class="note">%s</p>' % escape_text(NOT_A_VERDICT),
+        extra_body,
         build_counts_section(stats, ranked, skipped, results, cap),
         "<h2>Process storylines, highest score first</h2>",
     ]

@@ -1,7 +1,7 @@
 """Step 2: collect unique IOCs (IPs, DNS names, file hashes) from events.
 
 Nothing is skipped or scored here. Skipping is filters.py (M2) and
-ranking is scoring.py (M2). This step only de-duplicates and counts.
+ranking is scoring/ (M2). This step only de-duplicates and counts.
 
 The result of collect_iocs looks like:
     {"ip":   {"8.8.8.8": record, ...},
