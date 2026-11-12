@@ -32,6 +32,8 @@ THEME_CSS = """
   --app-warn-bg: #fff6dc;
   --app-warn-border: #e0b44c;
   --app-bad: #b42318;
+  --app-bad-bg: #fdecea;
+  --app-primary: #3b6fd6;
   --app-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
 }
 body.body--dark {
@@ -44,6 +46,8 @@ body.body--dark {
   --app-warn-bg: #3a3017;
   --app-warn-border: #8a6d1f;
   --app-bad: #ff8a80;
+  --app-bad-bg: #3d1f1f;
+  --app-primary: #6c93ec;
   --app-shadow: none;
 }
 body, .q-page { background: var(--app-bg); color: var(--app-text); }
@@ -54,6 +58,22 @@ body, .q-page { background: var(--app-bg); color: var(--app-text); }
   border-radius: 12px; box-shadow: var(--app-shadow); padding: 1rem 1.25rem; width: 100%; }
 .app-muted { color: var(--app-muted); font-size: 0.875rem; }
 .app-bad { color: var(--app-bad); font-weight: 600; }
+.app-error { background: var(--app-bad-bg); color: var(--app-bad); font-weight: 600;
+  border: 1px solid var(--app-bad); border-radius: 8px; padding: 0.5rem 1rem; width: 100%; }
+.app-narrow { max-width: 36rem; margin: 1.5rem auto 0; }
+.upload-form { display: flex; flex-direction: column; gap: 1rem; width: 100%; }
+.upload-drop { display: flex; flex-direction: column; gap: 0.5rem; align-items: center;
+  padding: 1.5rem 1rem; border: 2px dashed var(--app-border); border-radius: 12px;
+  background: var(--app-accent-soft); cursor: pointer; text-align: center; }
+.upload-drop:hover { border-color: var(--app-primary); }
+.upload-drop-title { font-weight: 600; }
+.upload-drop input[type=file] { max-width: 100%; color: var(--app-muted); }
+.upload-drop input[type=file]::file-selector-button { margin-right: 0.75rem; padding: 0.4rem 0.9rem;
+  border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-card);
+  color: var(--app-text); cursor: pointer; }
+.upload-button { padding: 0.65rem 1rem; border: 0; border-radius: 8px; cursor: pointer;
+  background: var(--app-primary); color: #ffffff; font-weight: 600; font-size: 1rem; }
+.upload-button:hover { filter: brightness(1.1); }
 .app-notice { background: var(--app-warn-bg); border-left: 4px solid var(--app-warn-border);
   border-radius: 8px; padding: 0.5rem 1rem; width: 100%; }
 .app-title { font-size: 1.15rem; font-weight: 700; }
