@@ -46,9 +46,10 @@ UPLOAD_FORM = (
 )
 
 # The IOC table is a plain grid (so each row can hold a Look up button).
-IOC_HEADERS = ["Rank", "Type", "Value", "Local score", "Why", "Portal"]
+IOC_HEADERS = ["Rank", "Type", "Value", "Local score", "Why", "Seen in", "Portal"]
 IOC_GRID_COLUMNS = ("3em 3.5em minmax(9em, 16em) 4.5em minmax(14em, 1fr) "
-                    "minmax(12em, 20em)")
+                    "minmax(8em, 12em) minmax(12em, 18em)")
+SEEN_IN_NAMES = 3  # process names shown in the Seen in column before "+N more"
 
 SKIPPED_COLUMNS = [
     {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},

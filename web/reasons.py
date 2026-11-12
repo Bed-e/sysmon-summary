@@ -93,13 +93,26 @@ def short_reason(text):
 def short_why(reasons):
     """Join the short phrases for a list of reasons into one line.
 
-    Input: reasons, a list of scoring texts (an IOC's "reasons", or the
-    reason texts of a process's signals).
-    Output: one line, parts joined with " · ". Phrases about the same
-    process are grouped ("a.exe runs from a user folder and sets an autorun
-    registry key"); repeated phrases appear once.
-    Used by: make_ioc_rows, summarize_storyline
-    and make_suspicious_rows.
+    Input: reasons, a list of scoring texts (see why_lines).
+    Output: the why_lines joined with " · ".
+    Used by: summarize_storyline and make_suspicious_rows (one-line
+    summaries of a process's findings).
+    """
+    return " · ".join(why_lines(reasons))
+
+
+def why_lines(reasons):
+    """Group the short phrases for a list of reasons, one line per process.
+
+    Input: reasons, a list of scoring texts: an IOC's "reasons" from
+    scoring.rank_iocs (each starts "process <name>: ..."), or the reason
+    texts of a process's findings (no process name).
+    Output: a list of lines in first-seen order. Phrases about the same
+    process share a line ("a.exe: runs from a user folder and sets an
+    autorun registry key"); a phrase with no process is a line of its own;
+    repeated phrases appear once.
+    Used by: short_why, and make_ioc_rows (the IOCs tab draws one line
+    each).
     """
     order = []       # parts in first-seen order: ("process", name) or ("phrase", text)
     by_process = {}  # process name -> its phrases
@@ -116,7 +129,7 @@ def short_why(reasons):
     parts = []
     for kind, text in order:
         if kind == "process":
-            parts.append("%s %s" % (text, " and ".join(by_process[text])))
+            parts.append("%s: %s" % (text, " and ".join(by_process[text])))
         else:
             parts.append(text)
-    return " · ".join(parts)
+    return parts

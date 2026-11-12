@@ -2,21 +2,26 @@
 the tables show, plus the small text helpers those tables use.
 """
 
-from web.config import NOT_ENRICHABLE_TEXT
-from web.reasons import portal_text, short_why
+from scoring.paths import file_name
+from web.config import NOT_ENRICHABLE_TEXT, SEEN_IN_NAMES
+from web.reasons import portal_text, why_lines
 
 
-def make_ioc_rows(ranked, results):
+def make_ioc_rows(ranked, results, table):
     """Build the rows of the ranked IOC table.
 
     Input: ranked (scoring.rank_iocs, in rank order); results, the portal
-    answers so far (state["results"], copied by the caller).
+    answers so far (state["results"], copied by the caller); table, the
+    process table from storylines.build_chains (state["chains"]["table"]).
     Output: a list of dicts {rank, type, value, score, why, full_why,
-    portal, action}, one per ranked IOC, in rank order. why is the short
-    text; full_why holds every original reason (shown on hover). action is
-    "Look up" when not requested, "Retry" when the lookup failed, else "".
+    seen_in, seen_in_full, portal, action, not_enrichable}, one per ranked
+    IOC, in rank order. why is a list of short lines, one per process
+    (why_lines); full_why holds every original reason (shown on hover).
+    seen_in and seen_in_full come from touched_by. action is "Look up" when
+    not requested, "Retry" when the lookup failed, else "" (ioc_action).
     An IOC tagged not_enrichable shows the plain reason (for example "not
-    sent: internal name") and no button.
+    sent: internal name") as its portal text, no button, and
+    not_enrichable True (drawn muted).
     Used by: build_ioc_rows (the grid draws the first rows).
     """
     answers = answers_by_ioc(results)
@@ -26,11 +31,44 @@ def make_ioc_rows(ranked, results):
         action = ioc_action(item, portal)
         if item["not_enrichable"]:
             portal = NOT_ENRICHABLE_TEXT.get(item["not_enrichable"], "not sent")
+        seen_in, seen_in_full = touched_by(item, table)
         rows.append({"rank": rank, "type": item["type"], "value": item["value"],
-                     "score": item["score"], "why": short_why(item["reasons"]),
+                     "score": item["score"], "why": why_lines(item["reasons"]),
                      "full_why": "\n".join(item["reasons"]),
-                     "portal": portal_text(portal), "action": action})
+                     "seen_in": seen_in, "seen_in_full": seen_in_full,
+                     "portal": portal_text(portal), "action": action,
+                     "not_enrichable": bool(item["not_enrichable"])})
     return rows
+
+
+def touched_by(item, table):
+    """Name the processes that touched one IOC.
+
+    Input: item, a ranked IOC (its record["process_guids"] comes from
+    iocs.collect_iocs, in first-seen order); table, the process table from
+    storylines.build_chains, which holds every process, flagged or not.
+    Output: (short_text, full_text). short_text lists up to SEEN_IN_NAMES
+    distinct image names in first-seen order, then "+N more" for the rest,
+    for example "chrome.exe, svchost.exe +4 more". full_text has every
+    name with its process count ("chrome.exe ×12"), one per line, for the
+    hover. A guid missing from the table, or with no image, is "unknown
+    process".
+    Used by: make_ioc_rows (the Seen in column).
+    """
+    counts = {}
+    order = []
+    for guid in item["record"]["process_guids"]:
+        entry = table.get(guid)
+        name = (file_name(entry["image"]) if entry else "") or "unknown process"
+        if name not in counts:
+            counts[name] = 0
+            order.append(name)
+        counts[name] += 1
+    short_text = ", ".join(order[:SEEN_IN_NAMES])
+    if len(order) > SEEN_IN_NAMES:
+        short_text += " +%d more" % (len(order) - SEEN_IN_NAMES)
+    full_text = "\n".join("%s ×%d" % (name, counts[name]) for name in order)
+    return short_text, full_text
 
 
 def ioc_action(item, portal):

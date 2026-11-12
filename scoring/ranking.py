@@ -27,9 +27,13 @@ def score_ioc(item, process_scores):
     record's "process_guids" lists every process that touched it);
     process_scores from processes.build_process_scores.
     Output: (score, reasons). reasons is a list of text such as
-    "+30 looks like paypal.com" (about this IOC) and
+    "+30 process chrome.exe: looks like paypal.com" (about this IOC, named
+    after the first process it was found in) and
     "+25 process evil.exe: document app started a program (...)"
-    (inherited). A guid missing from process_scores is ignored.
+    (inherited). Every reason names its process, so the IOC table can
+    group them by process (web.reasons.why_lines). A subject reason found
+    in several processes is counted once. A guid missing from
+    process_scores is ignored.
     Used by: rank_iocs.
     """
     subject = (item["type"], item["value"])
@@ -40,10 +44,12 @@ def score_ioc(item, process_scores):
         process = process_scores.get(guid)
         if process is None:
             continue
+        who = file_name(process["image"]) or "unknown process"
         for finding in process["findings"]:
             if finding["subject"] == subject and finding["reason"] not in seen_reasons:
                 seen_reasons.add(finding["reason"])
-                signals.append((finding["points"], finding["reason"]))
+                signals.append((finding["points"],
+                                "process %s: %s" % (who, finding["reason"])))
         if best is None or process_wide_points(process) > process_wide_points(best):
             best = process
 

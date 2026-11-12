@@ -206,20 +206,24 @@ def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
     ranked = [ioc("ip", "1.1.1.1", 30), ioc("dns", "a.example", 20)]
     answer = {"type": "dns", "value": "a.example", "status": "enriched",
               "score_0_to_100": 10, "label": "likely_safe", "reasons": []}
-    shown = rows.make_ioc_rows(ranked, [answer])
+    ranked[0]["record"]["process_guids"] = ["A"]
+    table = {"A": {"image": r"C:\x\a.exe"}}
+    shown = rows.make_ioc_rows(ranked, [answer], table)
     assert [r["rank"] for r in shown] == [1, 2]
     assert shown[0]["portal"] == "not requested"
     assert shown[1]["portal"] == "portal 10 (likely_safe)"
-    assert shown[0]["why"] == "t" and shown[0]["full_why"] == "+30 t"
+    assert shown[0]["why"] == ["t"] and shown[0]["full_why"] == "+30 t"
+    assert shown[0]["seen_in"] == "a.exe" and shown[1]["seen_in"] == ""
     assert shown[0]["action"] == "Look up" and shown[1]["action"] == ""
+    assert shown[0]["not_enrichable"] is False
     failed = enrich.not_enriched(ranked[0], "timed out")
-    assert rows.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
+    assert rows.make_ioc_rows(ranked, [failed], table)[0]["action"] == "Retry"
 
 
 def test_not_enrichable_row_shows_reason_and_no_button():
-    shown = rows.make_ioc_rows([ioc("dns", "dc1.corp", 30, "dns_internal")], [])
+    shown = rows.make_ioc_rows([ioc("dns", "dc1.corp", 30, "dns_internal")], [], {})
     assert shown[0]["portal"] == "not sent: internal name"
-    assert shown[0]["action"] == ""
+    assert shown[0]["action"] == "" and shown[0]["not_enrichable"] is True
 
 
 def test_make_skipped_rows_sorted():
@@ -334,13 +338,39 @@ def test_short_reason_covers_every_scoring_phrase():
     assert findings.enumeration_findings(burst)[0]["reason"] \
         .startswith("burst of discovery commands")
     assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
-    assert reasons.short_why([
-        "+20 connection from a program that rarely needs the network (x)",
+
+
+def test_why_lines_one_line_per_process():
+    lines = reasons.why_lines([
+        "+20 process a.exe: connection from a program that rarely needs the network (x)",
+        "+30 looks like microsoft.com",
         "+20 process a.exe: file runs from a user-writable path (x)",
         "+40 process a.exe: writes an autorun registry key (k)",
         "+20 process b.exe: file runs from a user-writable path (y)",
-    ]) == ("contacted by a program that rarely needs the network · a.exe runs from a user folder "
-           "and sets an autorun registry key · b.exe runs from a user folder")
+        "+20 process b.exe: file runs from a user-writable path (z)",
+    ])
+    assert lines == [
+        "a.exe: contacted by a program that rarely needs the network and runs from a "
+        "user folder and sets an autorun registry key",
+        "looks like microsoft.com",
+        "b.exe: runs from a user folder",
+    ]
+    assert reasons.short_why(["+20 process b.exe: double extension (.pdf.exe)", "+5 u"]) \
+        == "b.exe: has a double extension (.pdf.exe) · u"
+    assert reasons.why_lines([]) == []
+
+
+def test_touched_by_caps_names_and_counts_in_hover():
+    item = ioc("ip", "8.8.8.8")
+    item["record"]["process_guids"] = ["A", "B", "A2", "C", "D", "gone"]
+    table = {"A": {"image": r"C:\x\chrome.exe"}, "A2": {"image": r"C:\y\chrome.exe"},
+             "B": {"image": r"C:\x\svchost.exe"}, "C": {"image": r"C:\x\c.exe"},
+             "D": {"image": ""}}
+    short, full = rows.touched_by(item, table)
+    assert short == "chrome.exe, svchost.exe, c.exe +1 more"
+    assert full == "chrome.exe ×2\nsvchost.exe ×1\nc.exe ×1\nunknown process ×2"
+    item["record"]["process_guids"] = ["B"]
+    assert rows.touched_by(item, table) == ("svchost.exe", "svchost.exe ×1")
 
 
 def process_entry(image, time="2023-12-14 03:42:00", **lists):
