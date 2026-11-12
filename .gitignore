@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 CLAUDE.md
 .env
+
+data/hash_usage.txt
+uploads/
