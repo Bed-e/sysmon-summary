@@ -68,8 +68,12 @@ SCRIPT_HOSTS = ["cmd", "powershell", "wscript", "cscript", "mshta"]
 # A registry key containing one of these is an autorun location.
 AUTORUN_MARKERS = ["\\currentversion\\run",
                    "\\windows nt\\currentversion\\winlogon\\shell",
-                   "\\windows nt\\currentversion\\winlogon\\userinit",
-                   "\\image file execution options\\"]
+                   "\\windows nt\\currentversion\\winlogon\\userinit"]
+
+# Image File Execution Options is only a hijack when a Debugger value is
+# set (other values there, such as AuditLevel, are normal settings).
+IFEO_MARKER = "\\image file execution options\\"
+IFEO_HIJACK_VALUE = "\\debugger"
 
 NORMAL_PORTS = ["80", "443", "53"]
 REGISTRY_EVENT_IDS = [12, 13, 14]
@@ -163,10 +167,11 @@ def registry_persistence_signal(event):
     if not is_registry_write(event):
         return []
     key = event["TargetObject"].lower()
-    for marker in AUTORUN_MARKERS:
-        if marker in key:
-            return [(WEIGHT_REGISTRY_AUTORUN,
-                     "writes an autorun registry key (%s)" % event["TargetObject"])]
+    is_autorun = any(marker in key for marker in AUTORUN_MARKERS)
+    is_ifeo_hijack = IFEO_MARKER in key and key.endswith(IFEO_HIJACK_VALUE)
+    if is_autorun or is_ifeo_hijack:
+        return [(WEIGHT_REGISTRY_AUTORUN,
+                 "writes an autorun registry key (%s)" % event["TargetObject"])]
     return []
 
 
@@ -351,9 +356,13 @@ def dns_signals(name, well_known):
 
 # ---- Hash signals ----
 
-def hash_persistence_signal(images, registry_events):
+def hash_persistence_signal(images, registry_events, own_guids=()):
     """A registry write whose TargetObject or Details contains the file's
     full path (lowercased plain substring). A bare filename never matches.
+    Writes made by the file's own processes (`own_guids`) are ignored: a
+    process that sets its own autorun key is already scored once as a
+    process-level signal, so counting it here would be the same evidence
+    twice.
     """
     for image in images:
         needle = lower_path(image)
@@ -361,6 +370,8 @@ def hash_persistence_signal(images, registry_events):
             continue
         for event in registry_events:
             if not is_registry_write(event):
+                continue
+            if event["ProcessGuid"] in own_guids:
                 continue
             text = lower_path(event["TargetObject"] + " " + event.get("Details", ""))
             if needle in text:
@@ -402,7 +413,8 @@ def score_ioc(item, process_scores, ip_events, registry_events, config):
         signals.extend(dns_signals(value, config["well_known"]))
     elif ioc_type == "hash":
         images = record.get("images", [])
-        signals.extend(hash_persistence_signal(images, registry_events))
+        signals.extend(hash_persistence_signal(images, registry_events,
+                                               record["process_guids"]))
         signals.extend(trusted_path_adjustment(images, config["trusted_paths"]))
 
     # Inherit from the single highest-scoring process that touched it.

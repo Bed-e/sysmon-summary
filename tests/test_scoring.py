@@ -345,3 +345,38 @@ def test_rank_order_ties_broken_by_count_then_first_seen():
     ]
     ranked = rank_iocs(to_rank, [], CONFIG)
     assert [r["value"] for r in ranked] == ["b.example.com", "c.example.com", "a.example.com"]
+
+
+# ---- fixes: IFEO value and double counting ----
+
+IFEO = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"
+
+
+def test_ifeo_debugger_value_fires_but_other_values_do_not():
+    hijack = make_event(13, EventType="SetValue", TargetObject=IFEO + "notepad.exe\\Debugger")
+    audit = make_event(13, EventType="SetValue", TargetObject=IFEO + "LSASS.exe\\AuditLevel")
+    assert points(registry_persistence_signal(hijack)) == [WEIGHT_REGISTRY_AUTORUN]
+    assert registry_persistence_signal(audit) == []
+
+
+def test_hash_reference_ignores_writes_by_its_own_process():
+    own_write = make_event(13, ProcessGuid="{A}", EventType="SetValue",
+                           TargetObject="HKU\\x\\CurrentVersion\\Run\\a", Details=TEMP_EXE)
+    assert hash_persistence_signal([TEMP_EXE], [own_write], ["{A}"]) == []
+    # the same write by a different process still counts
+    assert points(hash_persistence_signal([TEMP_EXE], [own_write], ["{OTHER}"])) == [40]
+
+
+def test_file_that_sets_its_own_autorun_is_counted_once():
+    key = "HKU\\x\\CurrentVersion\\Run\\a"
+    events = [
+        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE, ParentImage="C:\\x\\p.exe"),
+        make_event(13, ProcessGuid="{A}", Image=TEMP_EXE, EventType="SetValue",
+                   TargetObject=key, Details=TEMP_EXE),
+    ]
+    item = {"type": "hash", "value": "a" * 64,
+            "record": {"count": 1, "first_seen": "", "process_guids": ["{A}"],
+                       "images": [TEMP_EXE]}}
+    registry = [e for e in events if e["event_id"] == 13]
+    score, reasons = score_ioc(item, build_process_scores(events), {}, registry, CONFIG)
+    assert score == WEIGHT_USER_WRITABLE_PATH + WEIGHT_REGISTRY_AUTORUN
