@@ -18,6 +18,8 @@ from filters import load_config, split_iocs
 from iocs import collect_iocs
 from parse import read_events
 from report import build_report, write_report
+from scoring.findings import find_findings
+from scoring.processes import build_process_scores
 from scoring.ranking import rank_iocs
 from storylines import build_storylines
 
@@ -197,8 +199,10 @@ def main():
     for path in args.paths:
         parsed = read_events(path)
         iocs = collect_iocs(parsed["events"])
+        findings = find_findings(parsed["events"], iocs, config)
+        process_scores = build_process_scores(parsed["events"], findings)
         to_rank, skipped = split_iocs(iocs, config)
-        ranked = rank_iocs(to_rank, parsed["events"], config)
+        ranked = rank_iocs(to_rank, process_scores)
         print(build_summary(path, parsed, iocs))
         print()
         print(build_ranking_summary(skipped, ranked, args.top))
@@ -209,7 +213,8 @@ def main():
             print(build_enrichment_summary(results))
             print()
         if args.report:
-            stories = build_storylines(parsed["events"], ranked, results)
+            stories = build_storylines(parsed["events"], ranked, results,
+                                       process_scores)
             page = build_report(path, iocs, skipped, ranked, results,
                                 args.cap, stories)
             out = report_path_for(args.report, path, len(args.paths))

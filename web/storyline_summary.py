@@ -33,7 +33,7 @@ def summarize_storyline(table, storyline, process_scores):
             times.append(entry["time"])
         process = process_scores.get(guid)
         if process is not None and process["score"] > 0:
-            reasons = [reason for points, reason in process["signals"]]
+            reasons = [finding["reason"] for finding in process["findings"]]
             flagged.append({"name": file_name(entry["image"]) or "unknown process",
                             "score": process["score"], "why": short_why(reasons)})
         ips.update(entry["ips"])

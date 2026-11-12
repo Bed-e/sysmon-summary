@@ -229,7 +229,7 @@ def test_store_result_replaces_a_retry():
 
 
 def test_short_reason_covers_every_scoring_phrase():
-    from scoring import domains, paths, processes, ranking
+    from scoring import domains, findings, paths, processes
     p = r"C:\Users\bob\AppData\Local\Temp\a.pdf.exe"
     cases = {
         "+20 process a.exe: file runs from a user-writable path (%s)" % p: "a.exe runs from a user folder",
@@ -249,8 +249,8 @@ def test_short_reason_covers_every_scoring_phrase():
         "+20 high-entropy label (x7f9q2kz0pl3)": "random-looking DNS label",
         "+30 looks like microsoft.com": "looks like microsoft.com",
         "+40 registry references this file's path (%s)" % p: "an autorun key points to this file",
-        "-15 all copies run from protected system paths (weak evidence)":
-            "only seen in system folders (lowers the score)",
+        "+30 process cmd.exe: burst of discovery commands: 3 in 20 s (whoami, net)":
+            "cmd.exe started a burst of discovery commands (whoami, net)",
         "+5 something new (detail)": "something new",
     }
     for text, short in cases.items():
@@ -260,8 +260,11 @@ def test_short_reason_covers_every_scoring_phrase():
     assert paths.path_signals(p)[1][1].startswith("double extension")
     assert processes.failed_lookup_signal(9)[0][1].endswith("failed DNS lookups from one process")
     assert domains.dns_signals("x" * 40 + ".com", [])[0][1].startswith("very long label")
-    assert ranking.trusted_path_adjustment([r"c:\windows\a.exe"], [r"c:\windows"])[0][1] \
-        .startswith("all copies run from protected system paths")
+    burst = [{"event_id": 1, "Image": "C:\\Windows\\System32\\%s.exe" % name,
+              "ParentProcessGuid": "{P}", "time": "2024-05-01 10:00:0%d" % i}
+             for i, name in enumerate(["whoami", "net", "ipconfig"])]
+    assert findings.enumeration_findings(burst)[0]["reason"] \
+        .startswith("burst of discovery commands")
     assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
     assert reasons.short_why([
         "+20 connection from an unexpected process (x)",
@@ -287,8 +290,9 @@ def test_summarize_storyline_and_caption():
                            registry=["k"], iocs=[{"type": "ip", "value": "1.2.3.4", "portal": hit}]),
     }
     scores = {"B": {"image": r"C:\x\b.exe", "score": 40,
-                    "signals": [(40, "writes an autorun registry key (k)")]},
-              "A": {"image": r"C:\x\a.exe", "score": 0, "signals": []}}
+                    "findings": [{"guid": "B", "points": 40, "kind": "process", "subject": None,
+                                  "reason": "writes an autorun registry key (k)"}]},
+              "A": {"image": r"C:\x\a.exe", "score": 0, "findings": []}}
     summary = storyline_summary.summarize_storyline(table, {"guids": ["A", "B"]}, scores)
     assert summary["flagged"] == [{"name": "b.exe", "score": 40, "why": "sets an autorun registry key"}]
     assert summary["portal_hits"] == ["ip 1.2.3.4: portal 90 (malicious)"]
@@ -324,8 +328,10 @@ def tl_table():
     }
 
 
-TL_SCORES = {"C": {"image": r"C:\x\child.exe", "score": 45, "signals": [(45, "x")]},
-             "P": {"image": r"C:\x\parent.exe", "score": 0, "signals": []}}
+TL_SCORES = {"C": {"image": r"C:\x\child.exe", "score": 45,
+                   "findings": [{"guid": "C", "points": 45, "reason": "x",
+                                 "kind": "process", "subject": None}]},
+             "P": {"image": r"C:\x\parent.exe", "score": 0, "findings": []}}
 
 
 def test_process_spans_first_and_last():

@@ -123,6 +123,6 @@ def refresh_view(view):
         view["timer"].deactivate()
         if view["story_version"] != state["version"]:
             view["stories"] = build_storylines(state["events"], state["ranked"],
-                                               results)
+                                               results, state["process_scores"])
             view["story_version"] = state["version"]
             view["redraw_story"]()

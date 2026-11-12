@@ -99,7 +99,8 @@ def build_storylines_tab(view):
     """
     state = view["state"]
     view["stories"] = build_storylines(state["events"], state["ranked"],
-                                       list(state["results"]))
+                                       list(state["results"]),
+                                       state["process_scores"])
     view["story_version"] = state["version"]
     box = ui.column().classes("w-full")
 

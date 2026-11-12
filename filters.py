@@ -2,8 +2,7 @@
 
 Skipping is not ranking (that is scoring/). A skipped IOC is never sent
 to an API, but it stays visible in the report with its reason code.
-Hashes are never skipped: a trusted path is only a weak ranking signal
-(see scoring/).
+Hashes are never skipped.
 
 Reason codes:
     ip_not_public, ip_known_shared_range, dns_internal
@@ -40,11 +39,10 @@ def load_list(path):
 
 
 def load_config(data_dir="data"):
-    """Load the four list files from data_dir into one dict:
-        {"ranges": [ip_network, ...], "ad_domains": [...],
-         "trusted_paths": [lowercase paths], "well_known": [...]}
-    A bad CIDR line is skipped, not fatal. trusted_paths and well_known are
-    used by scoring/; they are loaded here so all lists load in one place.
+    """Load the three list files from data_dir into one dict:
+        {"ranges": [ip_network, ...], "ad_domains": [...], "well_known": [...]}
+    A bad CIDR line is skipped, not fatal. well_known is used by scoring/;
+    it is loaded here so all lists load in one place.
     """
     ranges = []
     for text in load_list(os.path.join(data_dir, "shared_ranges.txt")):
@@ -57,10 +55,6 @@ def load_config(data_dir="data"):
     for text in load_list(os.path.join(data_dir, "ad_domains.txt")):
         ad_domains.append(text.lower().strip("."))
 
-    trusted_paths = []
-    for text in load_list(os.path.join(data_dir, "trusted_paths.txt")):
-        trusted_paths.append(text.lower())
-
     well_known = []
     for text in load_list(os.path.join(data_dir, "well_known_names.txt")):
         well_known.append(text.lower())
@@ -68,7 +62,6 @@ def load_config(data_dir="data"):
     return {
         "ranges": ranges,
         "ad_domains": ad_domains,
-        "trusted_paths": trusted_paths,
         "well_known": well_known,
     }
 

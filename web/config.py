@@ -72,8 +72,7 @@ SHORT_REASONS = [
     ("very long label", "very long DNS label", False),
     ("high-entropy label", "random-looking DNS label", False),
     ("registry references this file's path", "an autorun key points to this file", False),
-    ("all copies run from protected system paths",
-     "only seen in system folders (lowers the score)", False),
+    ("burst of discovery commands", "started a burst of discovery commands", True),
 ]
 
 # Portal labels that count as a "portal hit" in a storyline summary.

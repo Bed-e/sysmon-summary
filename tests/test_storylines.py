@@ -112,8 +112,8 @@ def test_score_storyline_uses_highest_item_not_a_sum():
     link_children(table)
     attach_ioc_results(table, [ranked_item("ip", "1.2.3.4", 30, [C]),
                                ranked_item("ip", "5.6.7.8", 10, [A])], [])
-    process_scores = {A: {"score": 5, "signals": [(5, "small")]},
-                      B: {"score": 50, "signals": [(50, "double extension")]}}
+    process_scores = {A: {"score": 5, "findings": [{"points": 5, "reason": "small"}]},
+                      B: {"score": 50, "findings": [{"points": 50, "reason": "double extension"}]}}
     score, reasons = score_storyline(table, A, process_scores)
     assert score == 50
     assert "process C:\\Users\\bob\\Downloads\\invoice.pdf.exe: +50 double extension" in reasons
@@ -128,7 +128,7 @@ def test_score_storyline_with_nothing_scored_is_zero():
 
 def test_build_storylines_sorts_highest_score_first():
     ranked = [ranked_item("ip", "1.2.3.4", 99, [D])]
-    result = build_storylines(EVENTS, ranked, [])
+    result = build_storylines(EVENTS, ranked, [], {})
     assert [s["root"] for s in result["storylines"]][0] == D
     assert result["storylines"][0]["score"] == 99
     assert result["storylines"][1]["size"] == 3

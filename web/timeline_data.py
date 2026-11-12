@@ -201,7 +201,7 @@ def make_suspicious_rows(events, process_scores):
     for guid, process in process_scores.items():
         if process["score"] <= 0:
             continue
-        reasons = [reason for points, reason in process["signals"]]
+        reasons = [finding["reason"] for finding in process["findings"]]
         rows.append({"time": first_seen.get(guid, "")[:19],
                      "process": file_name(process["image"]) or "unknown process",
                      "score": process["score"], "why": short_why(reasons),

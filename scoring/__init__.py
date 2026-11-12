@@ -1,21 +1,16 @@
-"""Step 4: give every IOC that was not skipped a local risk score.
-
-Scoring only decides the ORDER in which IOCs are looked up. It never means
-"safe" or "malicious", and a low score is not a verdict.
+"""Steps 3, 4 and the IOC part of step 6: local clues, process scores and IOC rank.
 
 A "signal" is a tuple (points, reason). Every signal function returns a
 list of signals, empty when nothing fires. A field that is missing ("")
 is unknown and never fires a signal.
 
-Process-level signals (odd parent pair, user-writable path, registry autorun
-write, burst of failed DNS lookups) are scored once per ProcessGuid. An IOC
-inherits the points of the single highest-scoring process that touched it
-(not the sum, so a widely used IOC does not pile up points).
+A "finding" is one signal tied to one process, with a kind ("process" or
+"subject") and, for subject findings, the IOC it is about. See findings.py.
 
-The result of rank_iocs is a list, highest score first:
-    [{"type": "ip", "value": "8.8.8.8", "score": 45,
-      "reasons": ["+25 ...", "-15 ..."], "record": {...}}, ...]
-
+Flow:
+    events, iocs, config -> findings.find_findings      -> findings
+    events, findings     -> processes.build_process_scores -> process_scores
+    to_rank, process_scores -> ranking.rank_iocs         -> ranked IOCs
 
 The package is split by kind of signal:
     config      weights, thresholds and word lists
@@ -23,5 +18,6 @@ The package is split by kind of signal:
     processes   registry and DNS-burst signals; build_process_scores
     network     connection signals and beaconing
     domains     DNS name signals
-    ranking     item scoring and rank_iocs (the entry point)
+    findings    every finding function and find_findings (the entry point)
+    ranking     IOC scoring by split inheritance and rank_iocs
 """

@@ -29,7 +29,7 @@ def make_report(command_line="cmd /c x", results=None, skipped=None):
     ranked = [ioc_item("1.2.3.4")]
     iocs = {"ip": {"1.2.3.4": {}}, "dns": {}, "hash": {}}
     skipped = skipped if skipped is not None else []
-    stories = build_storylines(events, ranked, results or [])
+    stories = build_storylines(events, ranked, results or [], {})
     return build_report("dump.evtx", iocs, skipped, ranked, results or [], 25, stories)
 
 
@@ -95,7 +95,7 @@ def test_enriched_and_partial_show_score_and_label():
 
 def test_zero_score_storyline_starts_collapsed():
     events = [event_1("{A}", "", "C:\\Windows\\System32\\svchost.exe")]
-    stories = build_storylines(events, [], [])
+    stories = build_storylines(events, [], [], {})
     page = build_report("d.evtx", {"ip": {}, "dns": {}, "hash": {}}, [], [], [],
                         25, stories)
     assert stories["storylines"][0]["score"] == 0
