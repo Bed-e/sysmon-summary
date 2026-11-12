@@ -8,7 +8,7 @@ from scoring.paths import file_name
 from storylines import build_storylines
 from web.reasons import portal_text, short_why, storyline_why
 from web.storyline_summary import summarize_storyline, summary_caption
-from web.tabs.common import build_show_more
+from web.tabs.common import build_show_more, score_badge
 
 
 def build_process_node(table, guid, depth=0):
@@ -22,9 +22,9 @@ def build_process_node(table, guid, depth=0):
     """
     entry = table[guid]
     name = entry["image"] or "unknown process"
-    with ui.expansion(name, value=(depth == 0)).classes("w-full"):
+    with ui.expansion(name, value=(depth == 0)).classes("w-full process-node"):
         if entry["command_line"]:
-            ui.label("command line: " + entry["command_line"])
+            ui.label("command line: " + entry["command_line"]).classes("process-cmd")
         if entry["user"]:
             ui.label("user: " + entry["user"])
         if entry["parent_image"] and entry["parent_guid"] not in table:
@@ -65,17 +65,23 @@ def build_storyline(view, number):
     table = stories["table"]
     summary = summarize_storyline(table, storyline, view["process_scores"])
     name = file_name(table[storyline["root"]]["image"]) or "unknown process"
-    title = "#%d  score %s  ·  %s" % (number, storyline["score"], name)
-    with ui.expansion(title, caption=summary_caption(summary)).classes("w-full border"):
+    title = "#%d  ·  %s" % (number, name)
+    with ui.expansion().classes("w-full app-card storyline") as box:
+        with box.add_slot("header"):
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                score_badge(storyline["score"])
+                with ui.column().classes("gap-0"):
+                    ui.label(title).classes("app-title")
+                    ui.label(summary_caption(summary)).classes("app-muted")
         if storyline["reasons"]:
             ui.label("Why it ranks here: " + storyline_why(storyline["reasons"]))
         if summary["flagged"]:
-            ui.label("Flagged processes").classes("font-bold mt-2")
+            ui.label("Flagged processes").classes("app-section")
             for flagged in summary["flagged"]:
                 ui.label("%s (score %d): %s" % (flagged["name"], flagged["score"],
                                                 flagged["why"]))
         if summary["portal_hits"]:
-            ui.label("Portal hits").classes("font-bold mt-2")
+            ui.label("Portal hits").classes("app-section")
             for hit in summary["portal_hits"]:
                 ui.label(hit)
         with ui.expansion("Full details").classes("w-full"):

@@ -47,17 +47,19 @@ def build_timeline_tab(view):
     """
     events = view["state"]["events"]
     view["spans"] = process_spans(events)
-    ui.label("One row per process, in tree order (children under their "
-             "parent). The bar runs from a process's first to its last event "
-             "and is coloured by its local score; dots are its events; dashed "
-             "lines link a parent to each child it started. Hover for details, "
-             "click a legend entry to hide a group, drag the sliders to zoom. "
-             "Times are UTC.").classes("app-muted")
-    with ui.row().classes("items-center"):
-        choice = ui.select(slice_choices(view["stories"]), value="flagged",
-                           label="Show").classes("w-96")
-        note = ui.label().classes("app-muted")
-    box = ui.column().classes("w-full")
+    with ui.column().classes("app-card"):
+        ui.label("Process timeline").classes("app-title")
+        ui.label("One row per process, in tree order (children under their "
+                 "parent). The bar runs from a process's first to its last event "
+                 "and is coloured by its local score; dots are its events; dashed "
+                 "lines link a parent to each child it started. Hover for details, "
+                 "click a legend entry to hide a group, drag the sliders to zoom. "
+                 "Times are UTC.").classes("app-muted")
+        with ui.row().classes("items-center"):
+            choice = ui.select(slice_choices(view["stories"]), value="flagged",
+                               label="Show").classes("w-96 max-w-full")
+            note = ui.label().classes("app-muted")
+        box = ui.column().classes("w-full")
     choice.on_value_change(lambda event: draw_process_timeline(view, box, note, event.value))
     draw_process_timeline(view, box, note, "flagged")
     # Redraw in the new colours when the theme changes (keeps the dropdown choice).
@@ -65,10 +67,11 @@ def build_timeline_tab(view):
         lambda: draw_process_timeline(view, box, note, choice.value))
 
     rows = make_suspicious_rows(events, view["process_scores"])
-    ui.label("Flagged processes, in order of first appearance") \
-        .classes("text-xl font-bold mt-4")
-    if not rows:
-        ui.label("none")
-        return
-    ui.table(columns=SUSPICIOUS_COLUMNS, rows=rows, row_key="guid") \
-        .classes("w-full").props("dense flat bordered")
+    with ui.column().classes("app-card"):
+        ui.label("Flagged processes, in order of first appearance") \
+            .classes("app-title")
+        if not rows:
+            ui.label("none").classes("app-muted")
+            return
+        ui.table(columns=SUSPICIOUS_COLUMNS, rows=rows, row_key="guid") \
+            .classes("w-full").props("dense flat bordered")
