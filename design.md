@@ -63,11 +63,10 @@ Each step is one plain function or a small group of functions in one module. Eac
 | IP | private, loopback, link-local, multicast, broadcast, CGNAT, reserved | `ip_not_public` |
 | IP | inside a published CDN or cloud range kept in a plain text list file | `ip_known_shared_range` |
 | DNS | ends in `.local`, `.lan`, `.internal`, `.home`, `.arpa`, is a single label, or is on our own AD domain list | `dns_internal` |
-| Hash | the file is in a protected system location (the Windows system directories and `Program Files`); the list of paths is kept in one configurable list | `hash_trusted_path` |
 
 `dns_internal` is a privacy rule, not only a speed rule. The DNS portal's design says names are sent to outside services and internal names must never be typed in. The IP portal likewise never sends private addresses out. This tool enforces both **before** any API call.
 
-A trusted path alone is weak, because a path can be faked. A skipped hash is still listed in the report, and a skipped item that also has a strong local risk signal (for example a trusted-looking path but an odd parent process) is **not** skipped.
+Hashes are never skipped. A trusted path (the Windows system directories and `Program Files`, kept in one configurable list) is weak evidence, because a path can be faked and a replaced system binary is a real attack. It is a small negative ranking signal instead (see below).
 
 ### Ranking signals (add points, each with a stated reason)
 
@@ -79,6 +78,9 @@ A trusted path alone is weak, because a path can be faked. A skipped hash is sti
 - Regular timing between connections to the same destination (possible beaconing)
 - **Persistence by registry write** (events 12, 13, 14): a process writes an autorun location such as a `\CurrentVersion\Run` key. Points are added to the writing process (matched by `ProcessGuid`).
 - **Persistence reference to a file**: for each hash IOC, a registry event whose `Details` or `TargetObject` contains the file's full path (lowercased, plain substring check). Points are added to that hash. This runs locally on every hash **before** any API call, so a new file with no reputation history still moves up the queue and the cap is more likely to reach it. After enrichment, the report shows the portal's verdict and the persistence hit together.
+- **Trusted path (negative)**: every file path seen for a hash is inside a protected system location. A small number of points is taken off. It lowers the order only; it never removes the hash from the queue and cannot cancel a strong signal.
+
+**Process-level signals** (odd parent pair, user-writable path, registry autorun write) are scored per `ProcessGuid`. Every IP, DNS name and hash that process touched inherits the full points, so a persistent or suspicious process pulls everything it did up the queue.
 
 Known limits of the path check: values using environment variables (`%APPDATA%`), quotes or arguments can be missed. A bare filename is never matched on its own, because common names would give false hits. A miss is "nothing pointed at it", never "no persistence".
 
