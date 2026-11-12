@@ -1,4 +1,7 @@
-"""Tests for web/app.py. No network: call_portal is faked, uploads are tiny."""
+"""Tests for the web package (app.py and the modules split out of it).
+
+No network: call_portal is faked, uploads are tiny.
+"""
 
 import io
 import threading
@@ -7,6 +10,8 @@ from starlette.datastructures import UploadFile
 
 import enrich
 from web import app as web
+from web import (config, enrich_jobs, limits, reasons, rows, runtime,
+                 storyline_summary, timeline_chart, timeline_data)
 
 
 def ioc(kind, value, score=10):
@@ -33,60 +38,60 @@ LIMITS = {"hash_per_minute": 4, "hash_per_day": 500}
 
 
 def test_load_limits_defaults_and_values(tmp_path):
-    assert web.load_limits(str(tmp_path / "none.txt")) == LIMITS
+    assert limits.load_limits(str(tmp_path / "none.txt")) == LIMITS
     f = tmp_path / "l.txt"
     f.write_text("# c\nhash_per_minute=10\nhash_per_day=abc\n")
-    assert web.load_limits(str(f)) == {"hash_per_minute": 10, "hash_per_day": 500}
+    assert limits.load_limits(str(f)) == {"hash_per_minute": 10, "hash_per_day": 500}
 
 
 def test_daily_count_persists_and_resets_on_new_day(tmp_path):
     p = str(tmp_path / "u.txt")
-    assert web.read_daily_count(p, "2026-01-01") == 0
-    web.add_daily_count(p, "2026-01-01")
-    assert web.add_daily_count(p, "2026-01-01") == 2
-    assert web.read_daily_count(p, "2026-01-01") == 2
-    assert web.read_daily_count(p, "2026-01-02") == 0
+    assert limits.read_daily_count(p, "2026-01-01") == 0
+    limits.add_daily_count(p, "2026-01-01")
+    assert limits.add_daily_count(p, "2026-01-01") == 2
+    assert limits.read_daily_count(p, "2026-01-01") == 2
+    assert limits.read_daily_count(p, "2026-01-02") == 0
 
 
 def test_needs_warning():
     ranked = [ioc("hash", "a" * 64) for _ in range(6)] + [ioc("ip", "8.8.8.8")]
-    assert web.needs_warning(ranked[:3], LIMITS, 0) == []
-    assert "6 hash lookups" in web.needs_warning(ranked, LIMITS, 0)[0]
-    assert "Daily budget" in web.needs_warning(ranked, LIMITS, 499)[-1]
-    assert web.needs_warning([ioc("ip", "1.1.1.1")], LIMITS, 999) == []
+    assert limits.needs_warning(ranked[:3], LIMITS, 0) == []
+    assert "6 hash lookups" in limits.needs_warning(ranked, LIMITS, 0)[0]
+    assert "Daily budget" in limits.needs_warning(ranked, LIMITS, 499)[-1]
+    assert limits.needs_warning([ioc("ip", "1.1.1.1")], LIMITS, 999) == []
 
 
 def test_seconds_to_wait():
-    assert web.seconds_to_wait(100.0, 110.0, 15.0) == 5.0
-    assert web.seconds_to_wait(100.0, 200.0, 15.0) == 0
+    assert limits.seconds_to_wait(100.0, 110.0, 15.0) == 5.0
+    assert limits.seconds_to_wait(100.0, 200.0, 15.0) == 0
 
 
 def test_run_enrichment_only_given_items_in_order_and_paces_hashes(monkeypatch, tmp_path):
     calls, pauses = [], []
     fake_portal(monkeypatch, calls)
-    monkeypatch.setitem(web.LAST_HASH, "time", 0.0)
+    monkeypatch.setitem(runtime.LAST_HASH, "time", 0.0)
     ranked = [ioc("hash", "a" * 64), ioc("ip", "8.8.8.8"), ioc("hash", "b" * 64),
               ioc("dns", "never.example")]
     state = fresh_state(ranked)
-    web.run_enrichment(state, ranked[:3], URLS, LIMITS, str(tmp_path / "u.txt"),
+    enrich_jobs.run_enrichment(state, ranked[:3], URLS, LIMITS, str(tmp_path / "u.txt"),
                        pause=pauses.append, clock=lambda: 1000.0)
     assert state["run"] == "done" and state["run_done"] == 3 and state["version"] == 3
     assert [r["value"] for r in state["results"]] == ["a" * 64, "8.8.8.8", "b" * 64]
     assert len(calls) == 3 and not any("never" in c for c in calls)
     assert pauses == [15.0]  # second hash waits the full spacing; first is free
-    assert web.read_daily_count(str(tmp_path / "u.txt")) == 2
+    assert limits.read_daily_count(str(tmp_path / "u.txt")) == 2
 
 
 def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
     calls = []
     fake_portal(monkeypatch, calls)
     usage = str(tmp_path / "u.txt")
-    web.add_daily_count(usage)
+    limits.add_daily_count(usage)
     state = fresh_state([ioc("hash", "a" * 64), ioc("ip", "8.8.8.8")])
-    web.run_enrichment(state, state["ranked"], URLS, {"hash_per_minute": 4, "hash_per_day": 1},
+    enrich_jobs.run_enrichment(state, state["ranked"], URLS, {"hash_per_minute": 4, "hash_per_day": 1},
                        usage, pause=lambda s: None, clock=lambda: 1.0)
     first, second = state["results"]
-    assert first["status"] == "not_enriched" and web.BUDGET_REASON in first["reasons"][0]
+    assert first["status"] == "not_enriched" and config.BUDGET_REASON in first["reasons"][0]
     assert second["status"] == "enriched"
     assert len(calls) == 1  # only the IP reached a portal
 
@@ -94,16 +99,16 @@ def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
 def test_thread_crash_sets_failed(monkeypatch, tmp_path):
     def boom(item, urls):
         raise RuntimeError("kaboom")
-    monkeypatch.setattr(web, "enrich_one", boom)
+    monkeypatch.setattr(enrich_jobs, "enrich_one", boom)
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    web.run_enrichment(state, state["ranked"], URLS, LIMITS, str(tmp_path / "u.txt"))
+    enrich_jobs.run_enrichment(state, state["ranked"], URLS, LIMITS, str(tmp_path / "u.txt"))
     assert state["run"] == "failed" and "kaboom" in state["error"]
 
 
 def test_start_refused_while_running():
     state = fresh_state([ioc("ip", "8.8.8.8")])
     state["run"] = "running"
-    assert web.start_enrichment(state, state["ranked"], URLS, LIMITS) is False
+    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is False
     assert state["results"] == []
 
 
@@ -112,7 +117,7 @@ def test_start_runs_thread_to_done(monkeypatch, tmp_path):
     fake_portal(monkeypatch, calls)
     state = fresh_state([ioc("ip", "8.8.8.8")])
     state["results"] = [{"type": "dns", "value": "kept.example", "status": "enriched"}]
-    assert web.start_enrichment(state, state["ranked"], URLS, LIMITS) is True
+    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is True
     for t in threading.enumerate():
         if t is not threading.current_thread() and t.daemon:
             t.join(5)
@@ -121,38 +126,38 @@ def test_start_runs_thread_to_done(monkeypatch, tmp_path):
 
 def test_choose_n():
     ranked = [ioc("ip", "1.1.1.1")] * 3
-    assert web.choose_n("10", ranked) == 3
-    assert web.choose_n("all", ranked) == 3
-    assert web.choose_n("5; drop", ranked) is None
+    assert rows.choose_n("10", ranked) == 3
+    assert rows.choose_n("all", ranked) == 3
+    assert rows.choose_n("5; drop", ranked) is None
 
 
 def test_portal_text_never_shows_a_failure_as_a_score():
-    assert web.portal_text("not requested") == "not requested"
+    assert reasons.portal_text("not requested") == "not requested"
     failed = enrich.not_enriched(ioc("ip", "1.1.1.1"), "timed out")
-    assert web.portal_text(failed) == "NOT ENRICHED: timed out"
+    assert reasons.portal_text(failed) == "NOT ENRICHED: timed out"
     ok = {"status": "partial", "score_0_to_100": 50, "label": "suspicious", "reasons": []}
-    assert web.portal_text(ok) == "portal 50 (suspicious) [partial: some sources failed]"
+    assert reasons.portal_text(ok) == "portal 50 (suspicious) [partial: some sources failed]"
 
 
 def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
     ranked = [ioc("ip", "1.1.1.1", 30), ioc("dns", "a.example", 20)]
     answer = {"type": "dns", "value": "a.example", "status": "enriched",
               "score_0_to_100": 10, "label": "likely_safe", "reasons": []}
-    rows = web.make_ioc_rows(ranked, [answer])
-    assert [r["rank"] for r in rows] == [1, 2]
-    assert rows[0]["portal"] == "not requested"
-    assert rows[1]["portal"] == "portal 10 (likely_safe)"
-    assert rows[0]["why"] == "t" and rows[0]["full_why"] == "+30 t"
-    assert rows[0]["action"] == "Look up" and rows[1]["action"] == ""
+    shown = rows.make_ioc_rows(ranked, [answer])
+    assert [r["rank"] for r in shown] == [1, 2]
+    assert shown[0]["portal"] == "not requested"
+    assert shown[1]["portal"] == "portal 10 (likely_safe)"
+    assert shown[0]["why"] == "t" and shown[0]["full_why"] == "+30 t"
+    assert shown[0]["action"] == "Look up" and shown[1]["action"] == ""
     failed = enrich.not_enriched(ranked[0], "timed out")
-    assert web.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
+    assert rows.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
 
 
 def test_make_skipped_rows_sorted():
     skipped = [{"type": "dns", "value": "b", "reason": "z", "record": {"count": 2}},
                {"type": "ip", "value": "a", "reason": "a", "record": {"count": 1}}]
-    rows = web.make_skipped_rows(skipped)
-    assert [r["reason"] for r in rows] == ["a", "z"] and rows[0]["count"] == 1
+    shown = rows.make_skipped_rows(skipped)
+    assert [r["reason"] for r in shown] == ["a", "z"] and shown[0]["count"] == 1
 
 
 def test_counts_and_status():
@@ -160,26 +165,26 @@ def test_counts_and_status():
     state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}}, "dns": {}, "hash": {}}
     ok = {"status": "enriched"}
     bad = {"status": "not_enriched"}
-    rows = {r["item"]: r["value"] for r in web.make_counts_rows(state, [ok, bad])}
-    assert rows["Looked up on the portals"] == "1"
-    assert rows["Lookup failed (not enriched)"] == "1"
-    assert rows["Not requested"] == "0"
-    assert web.status_text(state) == "No portal has been called yet."
+    shown = {r["item"]: r["value"] for r in rows.make_counts_rows(state, [ok, bad])}
+    assert shown["Looked up on the portals"] == "1"
+    assert shown["Lookup failed (not enriched)"] == "1"
+    assert shown["Not requested"] == "0"
+    assert enrich_jobs.status_text(state) == "No portal has been called yet."
     state.update(run="running", run_size=5, run_done=1)
     state["results"] = [ok]
-    assert web.status_text(state) == "Running: 1 of 5 done."
+    assert enrich_jobs.status_text(state) == "Running: 1 of 5 done."
     state.update(run="done")
-    assert web.status_text(state) == ("Last run finished: 1 looked up. "
+    assert enrich_jobs.status_text(state) == ("Last run finished: 1 looked up. "
                                       "1 of 2 ranked IOCs tried so far.")
     state.update(run="failed", error="boom")
-    assert web.status_text(state).startswith("Run failed: boom.")
+    assert enrich_jobs.status_text(state).startswith("Run failed: boom.")
 
 
 def test_choose_n():
     ranked = [ioc("ip", "1.1.1.1")] * 3
-    assert web.choose_n("10", ranked) == 3
-    assert web.choose_n("all", ranked) == 3
-    assert web.choose_n("5; drop", ranked) is None
+    assert rows.choose_n("10", ranked) == 3
+    assert rows.choose_n("all", ranked) == 3
+    assert rows.choose_n("5; drop", ranked) is None
 
 
 def post(name, data):
@@ -207,7 +212,7 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
     response = post("../../evil name.evtx", b"ElfFile\x00 body")
     location = response.headers["location"]
     assert location.startswith("/report/")
-    state = web.UPLOADS[location.rsplit("/", 1)[1]]
+    state = runtime.UPLOADS[location.rsplit("/", 1)[1]]
     assert state["name"] == "evil name.evtx" and state["run"] == "idle"
     assert state["results"] == [] and list(tmp_path.iterdir()) == []
 
@@ -215,18 +220,18 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
 def test_next_items_skips_tried_including_failures():
     ranked = [ioc("ip", "1.1.1.%d" % i) for i in range(1, 13)]
     state = fresh_state(ranked)
-    assert [i["value"] for i in web.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
+    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
     for item in ranked[:4]:
-        web.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
-    web.store_result(state, enrich.not_enriched(ranked[4], "timed out"))
-    assert [i["value"] for i in web.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
-    assert len(web.next_items(state, 100)) == 7
+        enrich_jobs.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
+    enrich_jobs.store_result(state, enrich.not_enriched(ranked[4], "timed out"))
+    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
+    assert len(enrich_jobs.next_items(state, 100)) == 7
 
 
 def test_store_result_replaces_a_retry():
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    web.store_result(state, enrich.not_enriched(state["ranked"][0], "timed out"))
-    web.store_result(state, {"type": "ip", "value": "8.8.8.8", "status": "enriched"})
+    enrich_jobs.store_result(state, enrich.not_enriched(state["ranked"][0], "timed out"))
+    enrich_jobs.store_result(state, {"type": "ip", "value": "8.8.8.8", "status": "enriched"})
     assert len(state["results"]) == 1 and state["results"][0]["status"] == "enriched"
     assert state["version"] == 2
 
@@ -257,7 +262,7 @@ def test_short_reason_covers_every_scoring_phrase():
         "+5 something new (detail)": "something new",
     }
     for text, short in cases.items():
-        assert web.short_reason(text) == short, text
+        assert reasons.short_reason(text) == short, text
     # The real scoring code still writes these phrases (guards against drift).
     assert scoring.path_signals(p)[0][1].startswith("file runs from a user-writable path")
     assert scoring.path_signals(p)[1][1].startswith("double extension")
@@ -265,8 +270,8 @@ def test_short_reason_covers_every_scoring_phrase():
     assert scoring.dns_signals("x" * 40 + ".com", [])[0][1].startswith("very long label")
     assert scoring.trusted_path_adjustment([r"c:\windows\a.exe"], [r"c:\windows"])[0][1] \
         .startswith("all copies run from protected system paths")
-    assert web.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
-    assert web.short_why([
+    assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
+    assert reasons.short_why([
         "+20 connection from an unexpected process (x)",
         "+20 process a.exe: file runs from a user-writable path (x)",
         "+40 process a.exe: writes an autorun registry key (k)",
@@ -292,10 +297,10 @@ def test_summarize_storyline_and_caption():
     scores = {"B": {"image": r"C:\x\b.exe", "score": 40,
                     "signals": [(40, "writes an autorun registry key (k)")]},
               "A": {"image": r"C:\x\a.exe", "score": 0, "signals": []}}
-    summary = web.summarize_storyline(table, {"guids": ["A", "B"]}, scores)
+    summary = storyline_summary.summarize_storyline(table, {"guids": ["A", "B"]}, scores)
     assert summary["flagged"] == [{"name": "b.exe", "score": 40, "why": "sets an autorun registry key"}]
     assert summary["portal_hits"] == ["ip 1.2.3.4: portal 90 (malicious)"]
-    assert web.summary_caption(summary) == (
+    assert storyline_summary.summary_caption(summary) == (
         "2 processes · 1 flagged · 1 portal hit · 1 remote address · 1 DNS name · "
         "2 files · 1 registry write · 03:42–04:10")
 
@@ -332,40 +337,40 @@ TL_SCORES = {"C": {"image": r"C:\x\child.exe", "score": 45, "signals": [(45, "x"
 
 
 def test_process_spans_first_and_last():
-    spans = web.process_spans(TL_EVENTS)
+    spans = timeline_data.process_spans(TL_EVENTS)
     assert spans["C"]["first_text"] == "03:43:00" and spans["C"]["last_text"] == "03:45:00"
     assert spans["P"]["first"] == spans["P"]["last"] == 1702525359407
     assert spans["Q"]["first_text"] == "03:46:00"  # the bad-time event is skipped
 
 
 def test_flagged_slice_includes_parents_only_of_flagged():
-    assert web.flagged_slice(tl_table(), TL_SCORES) == {"C", "P"}
+    assert timeline_data.flagged_slice(tl_table(), TL_SCORES) == {"C", "P"}
 
 
 def test_order_rows_tree_order_and_depth():
     table = tl_table()
     table["P"]["children"] = ["G", "C"]
-    rows = web.order_rows(table, {"P", "C", "Q", "G", "missing"})
+    rows = timeline_data.order_rows(table, {"P", "C", "Q", "G", "missing"})
     assert rows == [("P", 0), ("C", 1), ("G", 1), ("Q", 0)]
     # A child whose parent is not chosen becomes a root.
-    assert web.order_rows(table, {"C", "Q"}) == [("C", 0), ("Q", 0)]
+    assert timeline_data.order_rows(table, {"C", "Q"}) == [("C", 0), ("Q", 0)]
 
 
 def test_row_label_indents_and_shows_score():
     table = tl_table()
-    assert web.row_label(table, "P", 0, TL_SCORES) == "parent.exe"
-    assert web.row_label(table, "C", 1, TL_SCORES) == web.INDENT + "└ child.exe  (45)"
+    assert timeline_data.row_label(table, "P", 0, TL_SCORES) == "parent.exe"
+    assert timeline_data.row_label(table, "C", 1, TL_SCORES) == config.INDENT + "└ child.exe  (45)"
 
 
 def test_make_process_timeline_rows_bars_links_dots():
     table = tl_table()
-    rows = web.order_rows(table, {"P", "C", "Q"})
-    option = web.make_process_timeline(table, rows, web.process_spans(TL_EVENTS),
+    rows = timeline_data.order_rows(table, {"P", "C", "Q"})
+    option = timeline_chart.make_process_timeline(table, rows, timeline_data.process_spans(TL_EVENTS),
                                        TL_EVENTS, TL_SCORES)
-    assert option["yAxis"]["data"] == ["parent.exe", web.INDENT + "└ child.exe  (45)",
+    assert option["yAxis"]["data"] == ["parent.exe", config.INDENT + "└ child.exe  (45)",
                                        "other.exe"]
     series = {s["name"]: s for s in option["series"]}
-    high = series["Process, score %d+" % web.HIGH_SCORE]["data"]
+    high = series["Process, score %d+" % config.HIGH_SCORE]["data"]
     assert high == [{"coords": [[1702525380000, 1], [1702525500000, 1]],
                      "name": "child.exe  03:43:00 to 03:45:00  (score 45)"}]
     assert len(series["Process, score 0"]["data"]) == 2
@@ -380,10 +385,10 @@ def test_make_process_timeline_rows_bars_links_dots():
 
 def test_row_slider_only_for_many_rows():
     table = {}
-    for i in range(web.ROWS_VISIBLE + 1):
+    for i in range(config.ROWS_VISIBLE + 1):
         table["g%d" % i] = {"image": "a.exe", "parent_guid": "", "time": "%03d" % i,
                             "children": []}
-    option = web.make_process_timeline(table, web.order_rows(table, set(table)), {},
+    option = timeline_chart.make_process_timeline(table, timeline_data.order_rows(table, set(table)), {},
                                        [], {})
     assert option["dataZoom"][-1]["yAxisIndex"] == 0
 
@@ -405,15 +410,15 @@ def test_slice_choices_and_guids():
 
 def test_event_detail_is_short():
     event = {"event_id": 11, "Image": r"C:\x\a.exe", "TargetFilename": "C:\\" + "y" * 300}
-    text = web.event_detail(event)
-    assert text.startswith("a.exe wrote") and len(text) == web.DETAIL_LENGTH
+    text = timeline_data.event_detail(event)
+    assert text.startswith("a.exe wrote") and len(text) == config.DETAIL_LENGTH
 
 
 def test_storyline_why_is_short():
-    reasons = ["ip 1.2.3.4: +20 connection from an unexpected process (x)",
+    lines = ["ip 1.2.3.4: +20 connection from an unexpected process (x)",
                "ip 1.2.3.4: +40 process a.exe: writes an autorun registry key (k)",
                "highest of 28 scored items in this tree"]
-    assert web.storyline_why(reasons) == (
+    assert reasons.storyline_why(lines) == (
         "ip 1.2.3.4: contacted by an unexpected program · a.exe sets an autorun registry key")
-    assert web.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
+    assert reasons.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
         == "b.exe runs from a user folder"
