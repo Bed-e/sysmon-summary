@@ -6,7 +6,7 @@ from nicegui import ui
 from web.actions import lookup_one
 from web.config import IOC_GRID_COLUMNS, IOC_HEADERS
 from web.rows import make_ioc_rows
-from web.tabs.common import build_show_more
+from web.tabs.common import build_show_more, score_badge
 
 
 def lookup_handler(view, rank):
@@ -35,22 +35,23 @@ def build_ioc_rows(container, view, limit):
     rows = make_ioc_rows(state["ranked"], list(state["results"]))
     container.clear()
     with container:
-        with ui.grid().classes("w-full gap-x-4 gap-y-2 items-center text-sm") \
-                .style("grid-template-columns: %s" % IOC_GRID_COLUMNS):
+        with ui.grid().classes("w-full items-center text-sm") \
+                .style("gap: 0; grid-template-columns: %s" % IOC_GRID_COLUMNS):
             for title in IOC_HEADERS:
-                ui.label(title).classes("font-bold")
+                ui.label(title).classes("ioc-head")
             for row in rows[:limit]:
-                ui.label(str(row["rank"]))
-                ui.label(row["type"])
-                ui.label(row["value"]).classes("break-all")
-                ui.label(str(row["score"]))
-                with ui.label(row["why"]):
+                ui.label(str(row["rank"])).classes("ioc-cell")
+                ui.label(row["type"]).classes("ioc-cell")
+                ui.label(row["value"]).classes("ioc-cell break-all")
+                with ui.element("div").classes("ioc-cell"):
+                    score_badge(row["score"])
+                with ui.label(row["why"]).classes("ioc-cell"):
                     ui.tooltip(row["full_why"]).classes("whitespace-pre-line text-sm")
-                with ui.row().classes("items-center gap-2"):
+                with ui.row().classes("ioc-cell items-center gap-2"):
                     ui.label(row["portal"])
                     if row["action"]:
                         ui.button(row["action"], on_click=lookup_handler(view, row["rank"])) \
-                            .props("dense outline size=sm")
+                            .props("dense unelevated no-caps size=sm color=primary")
 
 
 def build_ioc_tab(view):
@@ -60,11 +61,13 @@ def build_ioc_tab(view):
     Output: draws the tab. Used by: report_page.
     """
     state = view["state"]
-    ui.label("Hover over a \"why\" to see the full reasons.") \
-        .classes("app-muted")
-    container = ui.column().classes("w-full")
+    with ui.column().classes("app-card"):
+        ui.label("Ranked IOCs").classes("app-title")
+        ui.label("Hover over a \"why\" to see the full reasons.") \
+            .classes("app-muted")
+        container = ui.column().classes("w-full overflow-x-auto")
 
-    def draw(limit):
-        build_ioc_rows(container, view, limit)
+        def draw(limit):
+            build_ioc_rows(container, view, limit)
 
-    view["redraw_ioc"] = build_show_more(draw, lambda: len(state["ranked"]))
+        view["redraw_ioc"] = build_show_more(draw, lambda: len(state["ranked"]))

@@ -81,6 +81,24 @@ body, .q-page { background: var(--app-bg); color: var(--app-text); }
 .count-value { font-size: 1.9rem; font-weight: 700; line-height: 1.1; }
 .count-title { font-weight: 600; }
 .app-card .q-tab-panels { background: transparent; }
+.app-badge { display: inline-block; min-width: 2.2rem; text-align: center; font-weight: 700;
+  font-size: 0.8rem; border-radius: 999px; padding: 0.1rem 0.6rem; }
+.app-badge-normal { background: #e5e7eb; color: #374151; }
+.app-badge-flagged { background: #fde7c0; color: #8a5300; }
+.app-badge-high { background: #fbd5d1; color: #9b1c12; }
+body.body--dark .app-badge-normal { background: #374151; color: #e5e7eb; }
+body.body--dark .app-badge-flagged { background: #5a3d0a; color: #fbd38d; }
+body.body--dark .app-badge-high { background: #5c1f1a; color: #ffb4ab; }
+.ioc-head { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--app-muted); padding: 0.4rem 1rem 0.4rem 0;
+  border-bottom: 2px solid var(--app-border); }
+.ioc-cell { padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--app-border); }
+.app-section { font-weight: 700; margin-top: 0.5rem; }
+.storyline { padding: 0.25rem 0.75rem; }
+.process-node .q-expansion-item__content { border-left: 2px solid var(--app-border);
+  margin-left: 0.5rem; padding-left: 0.75rem; }
+.process-cmd { font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem;
+  word-break: break-all; }
 .app-notice { background: var(--app-warn-bg); border-left: 4px solid var(--app-warn-border);
   border-radius: 8px; padding: 0.5rem 1rem; width: 100%; }
 .app-title { font-size: 1.15rem; font-weight: 700; }
