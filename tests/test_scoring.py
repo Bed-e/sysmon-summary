@@ -272,8 +272,16 @@ def test_registry_reference_matches_full_path_only():
 
 
 def test_registry_reference_via_target_object():
-    event = make_event(12, EventType="CreateKey", TargetObject="HKLM\\" + TEMP_EXE)
+    event = make_event(12, EventType="CreateKey",
+                       TargetObject="HKU\\x\\CurrentVersion\\Run\\" + TEMP_EXE)
     assert hash_persistence_signal([TEMP_EXE], [event]) != []
+
+
+def test_registry_reference_outside_autorun_keys_is_ignored():
+    inventory = make_event(13, EventType="SetValue",
+                           TargetObject="HKLM\\x\\InventoryApplicationFile\\evil.exe|123\\LowerCaseLongPath",
+                           Details=TEMP_EXE.lower())
+    assert hash_persistence_signal([TEMP_EXE], [inventory]) == []
 
 
 def test_trusted_path_adjustment_all_paths_must_be_trusted():

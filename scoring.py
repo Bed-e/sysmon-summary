@@ -357,8 +357,11 @@ def dns_signals(name, well_known):
 # ---- Hash signals ----
 
 def hash_persistence_signal(images, registry_events, own_guids=()):
-    """A registry write whose TargetObject or Details contains the file's
-    full path (lowercased plain substring). A bare filename never matches.
+    """A registry write to an autorun location (the same test as
+    registry_persistence_signal) whose TargetObject or Details contains the
+    file's full path (lowercased plain substring). A bare filename never
+    matches, and neither does a path that merely appears in some other key
+    (for example a Windows application inventory entry).
     Writes made by the file's own processes (`own_guids`) are ignored: a
     process that sets its own autorun key is already scored once as a
     process-level signal, so counting it here would be the same evidence
@@ -369,7 +372,7 @@ def hash_persistence_signal(images, registry_events, own_guids=()):
         if needle == "":
             continue
         for event in registry_events:
-            if not is_registry_write(event):
+            if not registry_persistence_signal(event):
                 continue
             if event["ProcessGuid"] in own_guids:
                 continue
