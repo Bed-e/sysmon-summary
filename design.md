@@ -15,7 +15,7 @@ It is a **triage helper, not a verdict engine**. It never says "clean" or "safe"
 - Uploading any file to any service. Only IOC values (an IP, a DNS name, a hash) leave the tool, and only to the three local APIs.
 - IPv6 (the IP API accepts IPv4 only)
 - Other IOC types as enrichment targets (URLs, registry keys, mutexes). No portal can look them up. Registry writes are still read and used as a local ranking signal (section 5).
-- Threads, async code and parallel API calls (see sections 2 and 10)
+- Async code and parallel API calls (see sections 2 and 10). One background thread is allowed in M5 only, to keep the web page responsive during lookups (section 7).
 
 ## 2. Ground rules for the code
 
@@ -248,7 +248,19 @@ Success `200` (always, for a valid name, even when every source failed):
   - a table of skipped IOCs with reason codes, so the analyst can audit the filter
   - how many IOCs were found, skipped, looked up and left un-enriched because of the cap
   - a fixed note that the scores are not a verdict
-- **M5, Flask web app.** The analyst uploads a dump in a browser and sees the same report. It reuses the same functions. The web part only handles the upload and shows the page.
+- **M5, Flask web app.** The analyst uploads a dump in a browser and sees the same report. It reuses the same functions. The web part only handles the upload, the enrich button and showing the page.
+  - **No API is called by default.** Uploading a dump parses, filters and ranks it locally and shows the ranked table. Every IOC shows "not requested" in the portal column.
+  - **Enrich on demand.** A plain HTML form has a dropdown for N and an "Enrich top N" button. N is limited to the lookup cap (`DEFAULT_CAP`). Pressing the button sends only the N highest-ranked IOCs to the portals. IOCs outside the top N are never sent.
+  - **One background thread.** The button starts a single thread (approved by Bed-e, M5 only) that runs the same sequential `for` loop as M3, one lookup at a time, highest rank first. The thread exists only so the web request returns at once. Calls are still not parallel.
+  - **The page fills in as answers arrive, without JavaScript.** While the thread runs, the page carries a `<meta http-equiv="refresh">` tag, so the browser reloads it every few seconds and each reload shows the answers so far. When the thread finishes, the tag is left out and the reloading stops.
+  - **Shared state.** The ranked list, the results so far and the run state ("idle", "running", "done", "failed") live in a module-level dict keyed by an upload id. Only the thread writes results. The page only reads. The browser never sends IOC values back, so the server only ever looks up IOCs it ranked itself.
+  - **Failures stay visible.** A lookup that fails is shown as "not enriched" with the reason, as in M3. If the thread itself crashes, the run state becomes "failed" with the error text, and the page stops reloading.
+  - Only one enrich run per upload at a time. Pressing the button while one is running does nothing. Enrichment in the web app works as follows:
+  - **No API is called by default.** Upload gives the local ranking only. Every IOC shows "not requested".
+  - **On demand.** A dropdown (5, 10, 25, 50, 100, all) and an "Enrich top N" button send the N most suspicious IOCs to the portals. There is no fixed cap (`--cap` and `DEFAULT_CAP` stay for the command line only).
+  - **Live fill-in.** The browser runs a plain JavaScript loop (no libraries) that asks the server for one IOC at a time (`POST /enrich/<upload_id>/<rank>`) and fills in each row as its answer arrives. The server keeps the ranked list in memory and never accepts IOC values from the browser. A Stop button cancels the rest. The loop is sequential, so rule 6 in section 9 still holds.
+  - **Rate-limit protection.** Only hash lookups reach VirusTotal, so only they are counted. Before sending, the page counts the hash lookups in the top N and warns if they would exceed the limits (time needed at the per-minute rate, share of the daily budget), and the analyst chooses Send anyway or Cancel. The loop spaces hash lookups to stay under the per-minute limit. The server keeps a daily count of hash lookups in a small file, so a restart does not reset it, and once the daily budget is used up it answers "not enriched: daily VirusTotal budget reached" without calling the portal (a hard stop, even if the warning is bypassed). Every hash call is counted, even if the portal answered from its own cache, because the tool cannot see that.
+  - **Limits file.** The limits live in `data/api_limits.txt`, not in the code, so they can follow the analyst's real VirusTotal key. Defaults: 4 per minute and 500 per day (VirusTotal free public API; to be checked against the analyst's key, and a premium key has higher limits). The monthly limit is not tracked.
 
 ## 8. Architecture and file layout
 
@@ -264,7 +276,8 @@ Small flat modules, each with plain functions:
 | `storylines.py` | build process chains from `ProcessGuid` |
 | `report.py` | write the HTML |
 | `main.py` | command line: dump in, report out |
-| `web/app.py` | the Flask app (M5 only) |
+| `web/app.py` | the Flask app, the enrich thread and its shared state (M5 only) |
+| `data/api_limits.txt` | per-minute and per-day hash lookup limits for the web app (M5 only) |
 
 ## 9. Decisions, each with its reason
 
@@ -273,7 +286,7 @@ Small flat modules, each with plain functions:
 3. **Filter, then rank, instead of filter only.** Skipping removes only what cannot produce a useful answer. Ranking handles the rest, so a cap or a timeout still leaves the most suspicious IOCs checked first.
 4. **Skipped items are always visible with a reason.** Attackers abuse trusted binaries and domains, and the analyst must be able to audit the filter.
 5. **Local clues are part of the product.** The APIs score reputation only. They cannot see a double extension, a strange parent process or a lookalike domain.
-6. **A plain `for` loop for API calls, with a cap per run.** It is the easiest code to read. The filter makes the list short. Parallelism is added only if measured to be too slow, and only with Bed-e's approval.
+6. **A plain `for` loop for API calls, with a cap per run.** It is the easiest code to read. In M5 the same loop runs inside one background thread so the page stays responsive. The filter makes the list short. Parallelism is added only if measured to be too slow, and only with Bed-e's approval.
 7. **Process-centric output.** An analyst reads a story, "this process started that one and talked to that address", not a flat list of 5,000 rows.
 8. **Private and internal values never leave the machine.** This follows the rules of the IP and DNS portals.
 9. **Tests make no network calls, and samples are fixtures only.** They run against the sample dumps and saved API answers, to check the code works. The samples never decide the design (section 3). Failures that cannot be recorded (a timeout, a `503`) are simulated, and the test says so.
@@ -281,7 +294,7 @@ Small flat modules, each with plain functions:
 ## 10. Open questions (ask Bed-e before deciding)
 
 - Should the hash skip rule use signature data (Sysmon events 6 and 7) when a dump contains it? Dumps without it must still work, using path alone.
-- Is a sequential loop fast enough on real dumps? If not, threads need Bed-e's approval.
+- Is a sequential loop fast enough on real dumps? If not, parallel calls need Bed-e's approval. (One background thread for the M5 page is already approved. It does not make calls in parallel.)
 - Does the tool need a cache of its own, or are the portals' caches enough?
 - What is the per-run API cap?
 - How are the local score and the API scores combined into one ranking?
@@ -296,5 +309,5 @@ Each is done when its stated result works on the sample dumps used as test fixtu
 - **M2 Filter and rank.** Each IOC has a skip reason or a local score with reasons, including the two persistence signals, with tests for every rule.
 - **M3 Enrich.** The tool queries the three portals one IOC at a time, highest score first, up to the cap, and shows failures as not enriched.
 - **M4 Storylines and static HTML.** One HTML report is written, with ranked process chains and the skipped-items table.
-- **M5 Flask web app.** A dump uploaded in the browser gives the same report.
+- **M5 Flask web app.** A dump uploaded in the browser gives the same report, with no API called until the analyst picks N and presses the button. The top N IOCs are then looked up one at a time by a background thread, and the page fills in as answers arrive. No API is called until the analyst presses the button and picks N. Results fill in row by row, with a warning before sending and a hard daily stop for VirusTotal-backed hash lookups, using the limits in `data/api_limits.txt`.
 - **Later, only with approval.** Parallel calls, a cache of our own, other IOC types.
