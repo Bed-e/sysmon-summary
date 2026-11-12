@@ -39,12 +39,16 @@ def upload_page(error: str = ""):
     Output: draws the page. Nothing is sent to any portal by uploading.
     """
     page_setup()
-    ui.label("Upload a Sysmon .evtx dump. It is read, filtered and ranked on "
-             "this machine. No portal is called until you press "
-             "\"Enrich next N\" or a Look up button on the report page.")
-    if error in UPLOAD_ERRORS:
-        ui.label(UPLOAD_ERRORS[error]).classes("app-bad")
-    ui.html(UPLOAD_FORM, sanitize=False)
+    with ui.column().classes("app-card app-narrow"):
+        ui.label("Upload a Sysmon dump").classes("app-title")
+        ui.label("The .evtx file is read, filtered and ranked on this "
+                 "machine.").classes("app-muted")
+        ui.label("Nothing is sent to any portal until you press \"Enrich "
+                 "next N\" or a Look up button on the report page."
+                 ).classes("app-muted")
+        if error in UPLOAD_ERRORS:
+            ui.label(UPLOAD_ERRORS[error]).classes("app-error")
+        ui.html(UPLOAD_FORM, sanitize=False).classes("w-full")
 
 
 def report_page(upload_id: str):

@@ -29,9 +29,12 @@ UPLOAD_ERRORS = {
 }
 
 UPLOAD_FORM = (
-    '<form method="post" action="/upload" enctype="multipart/form-data">'
-    '<input type="file" name="file" accept=".evtx"> '
-    '<button type="submit">Upload and rank</button></form>'
+    '<form class="upload-form" method="post" action="/upload" '
+    'enctype="multipart/form-data">'
+    '<label class="upload-drop">'
+    '<span class="upload-drop-title">Choose a Sysmon .evtx file</span>'
+    '<input type="file" name="file" accept=".evtx"></label>'
+    '<button class="upload-button" type="submit">Upload and rank</button></form>'
 )
 
 # The IOC table is a plain grid (so each row can hold a Look up button).
