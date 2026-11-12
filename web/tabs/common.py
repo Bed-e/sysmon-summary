@@ -4,6 +4,7 @@
 from nicegui import ui
 
 from web.config import SHOW_STEP
+from web.timeline_data import score_level
 
 
 def build_show_more(draw, total_fn, step=SHOW_STEP):
@@ -33,3 +34,17 @@ def build_show_more(draw, total_fn, step=SHOW_STEP):
     more = ui.button("Show more", on_click=click)
     redraw()
     return redraw
+
+
+def score_badge(score):
+    """Draw a small coloured pill holding a score number.
+
+    Input: score, an int local score (from a ranked IOC or a storyline).
+    Output: the drawn label. Its colour comes from score_level, the same
+    grouping the timeline bars use: grey (0), orange (1 to 39), red (40+),
+    through the app-badge-<level> classes in web/theme.py. Text only, so
+    nothing from a dump is ever raw HTML.
+    Used by: build_ioc_rows and build_storyline.
+    """
+    return ui.label(str(score)).classes(
+        "app-badge app-badge-" + score_level(score))

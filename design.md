@@ -279,7 +279,7 @@ Small flat modules, each with plain functions:
 | `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | the enrich thread, the hash limits and daily count, and the shared state (M5 only) |
 | `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, table rows, storyline summaries and timeline data for the tabs; no UI code (M5 only) |
 | `web/config.py` | the web app's constants, columns and colours (M5 only) |
-| `web/theme.py` | page colours and card CSS (fixed strings only), the top bar and the Light / Dark / System toggle; the choice is kept per browser in `app.storage.user` (the `.nicegui/` folder, git-ignored) and the timeline chart is redrawn in matching colours (M5 only) |
+| `web/theme.py` | page colours and card CSS (fixed strings only), the top bar and the Light / Dark / System toggle; the choice is kept per browser in `app.storage.user` (the `.nicegui/` folder, git-ignored) and the timeline chart is redrawn in matching colours (M5 only). Shared styles: `app-card` boxes, count tiles, and score badges (grey 0, orange 1-39, red 40+, the same grouping as the timeline bars) |
 | `data/api_limits.txt` | per-minute and per-day hash lookup limits for the web app (M5 only) |
 | `data/hash_usage.txt` | today's hash lookup count, written by the web app, gitignored (M5 only) |
 
