@@ -24,7 +24,7 @@ from iocs import ip_from_event, normalize_ip
 
 # ---- Weights (placeholders, tune freely) ----
 WEIGHT_USER_WRITABLE_PATH = 20
-WEIGHT_DOUBLE_EXTENSION = 30
+WEIGHT_DOUBLE_EXTENSION = 50  # disguise has no benign use: heaviest single signal
 WEIGHT_ODD_PARENT = 25
 WEIGHT_REGISTRY_AUTORUN = 40
 WEIGHT_FAILED_LOOKUPS = 15
