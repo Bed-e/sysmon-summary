@@ -300,23 +300,107 @@ def test_summarize_storyline_and_caption():
         "2 files · 1 registry write · 03:42–04:10")
 
 
-def test_timeline_points_split_by_process_score():
-    events = [
-        {"event_id": 1, "time": "2023-12-14 03:42:39.407084+00:00", "ProcessGuid": "A",
-         "Image": r"C:\x\a.exe", "CommandLine": "a.exe /go"},
-        {"event_id": 3, "time": "2023-12-14 03:43:00.000000+00:00", "ProcessGuid": "B",
-         "Image": r"C:\x\b.exe", "DestinationIp": "1.2.3.4", "DestinationPort": "443"},
-        {"event_id": 22, "time": "bad time", "ProcessGuid": "B", "Image": "", "QueryName": "q"},
-    ]
-    scores = {"B": {"image": r"C:\x\b.exe", "score": 45, "signals": [(45, "x")]}}
-    points = web.make_timeline_points(events, scores)
-    assert len(points["normal"]) == 1 and len(points["high"]) == 1 and points["flagged"] == []
-    assert points["normal"][0]["value"] == [1702525359407, "Process start"]
-    assert points["high"][0]["name"] == "03:43:00  b.exe → 1.2.3.4:443  (process score 45)"
-    option = web.make_timeline_option(points)
-    assert option["useUTC"] is True and len(option["series"]) == 3
-    rows = web.make_suspicious_rows(events, scores)
-    assert [(r["process"], r["time"]) for r in rows] == [("b.exe", "2023-12-14 03:43:00")]
+TL_EVENTS = [
+    {"event_id": 1, "time": "2023-12-14 03:42:39.407084+00:00", "ProcessGuid": "P",
+     "Image": r"C:\x\parent.exe", "CommandLine": "parent.exe"},
+    {"event_id": 1, "time": "2023-12-14 03:43:00.000000+00:00", "ProcessGuid": "C",
+     "Image": r"C:\x\child.exe", "CommandLine": "child.exe /go"},
+    {"event_id": 3, "time": "2023-12-14 03:44:00.000000+00:00", "ProcessGuid": "C",
+     "Image": r"C:\x\child.exe", "DestinationIp": "1.2.3.4", "DestinationPort": "443"},
+    {"event_id": 13, "time": "2023-12-14 03:45:00.000000+00:00", "ProcessGuid": "C",
+     "Image": r"C:\x\child.exe", "TargetObject": "HKU\\Run\\x"},
+    {"event_id": 1, "time": "2023-12-14 03:46:00.000000+00:00", "ProcessGuid": "Q",
+     "Image": r"C:\x\other.exe", "CommandLine": "other.exe"},
+    {"event_id": 22, "time": "bad time", "ProcessGuid": "Q", "Image": "", "QueryName": "q"},
+]
+
+
+def tl_table():
+    def entry(image, parent, time, children):
+        return {"image": image, "parent_guid": parent, "time": time,
+                "children": children}
+    return {
+        "P": entry(r"C:\x\parent.exe", "", "2023-12-14 03:42:39", ["C"]),
+        "C": entry(r"C:\x\child.exe", "P", "2023-12-14 03:43:00", []),
+        "Q": entry(r"C:\x\other.exe", "", "2023-12-14 03:46:00", []),
+        "G": entry(r"C:\x\gone.exe", "C", "2023-12-14 03:47:00", []),
+    }
+
+
+TL_SCORES = {"C": {"image": r"C:\x\child.exe", "score": 45, "signals": [(45, "x")]},
+             "P": {"image": r"C:\x\parent.exe", "score": 0, "signals": []}}
+
+
+def test_process_spans_first_and_last():
+    spans = web.process_spans(TL_EVENTS)
+    assert spans["C"]["first_text"] == "03:43:00" and spans["C"]["last_text"] == "03:45:00"
+    assert spans["P"]["first"] == spans["P"]["last"] == 1702525359407
+    assert spans["Q"]["first_text"] == "03:46:00"  # the bad-time event is skipped
+
+
+def test_flagged_slice_includes_parents_only_of_flagged():
+    assert web.flagged_slice(tl_table(), TL_SCORES) == {"C", "P"}
+
+
+def test_order_rows_tree_order_and_depth():
+    table = tl_table()
+    table["P"]["children"] = ["G", "C"]
+    rows = web.order_rows(table, {"P", "C", "Q", "G", "missing"})
+    assert rows == [("P", 0), ("C", 1), ("G", 1), ("Q", 0)]
+    # A child whose parent is not chosen becomes a root.
+    assert web.order_rows(table, {"C", "Q"}) == [("C", 0), ("Q", 0)]
+
+
+def test_row_label_indents_and_shows_score():
+    table = tl_table()
+    assert web.row_label(table, "P", 0, TL_SCORES) == "parent.exe"
+    assert web.row_label(table, "C", 1, TL_SCORES) == web.INDENT + "└ child.exe  (45)"
+
+
+def test_make_process_timeline_rows_bars_links_dots():
+    table = tl_table()
+    rows = web.order_rows(table, {"P", "C", "Q"})
+    option = web.make_process_timeline(table, rows, web.process_spans(TL_EVENTS),
+                                       TL_EVENTS, TL_SCORES)
+    assert option["yAxis"]["data"] == ["parent.exe", web.INDENT + "└ child.exe  (45)",
+                                       "other.exe"]
+    series = {s["name"]: s for s in option["series"]}
+    high = series["Process, score %d+" % web.HIGH_SCORE]["data"]
+    assert high == [{"coords": [[1702525380000, 1], [1702525500000, 1]],
+                     "name": "child.exe  03:43:00 to 03:45:00  (score 45)"}]
+    assert len(series["Process, score 0"]["data"]) == 2
+    link = series["Parent → child"]["data"]
+    assert link == [{"coords": [[1702525380000, 0], [1702525380000, 1]],
+                     "name": "03:43:00 parent.exe started child.exe"}]
+    assert len(series["Process start"]["data"]) == 3
+    assert series["Network"]["data"][0]["value"] == [1702525440000, 1]
+    assert len(series["Registry"]["data"]) == 1 and series["DNS"]["data"] == []
+    assert len(option["dataZoom"]) == 2  # no row slider for 3 rows
+
+
+def test_row_slider_only_for_many_rows():
+    table = {}
+    for i in range(web.ROWS_VISIBLE + 1):
+        table["g%d" % i] = {"image": "a.exe", "parent_guid": "", "time": "%03d" % i,
+                            "children": []}
+    option = web.make_process_timeline(table, web.order_rows(table, set(table)), {},
+                                       [], {})
+    assert option["dataZoom"][-1]["yAxisIndex"] == 0
+
+
+def test_slice_choices_and_guids():
+    table = tl_table()
+    stories = {"table": table,
+               "storylines": [{"root": "P", "size": 2, "guids": ["P", "C"]},
+                              {"root": "Q", "size": 1, "guids": ["Q"]}]}
+    choices = web.slice_choices(stories)
+    assert list(choices) == ["flagged", "story:1", "story:2", "all"]
+    assert choices["story:1"] == "Storyline #1: parent.exe (2 processes)"
+    view = {"stories": stories, "process_scores": TL_SCORES}
+    assert web.slice_guids(view, "story:2") == {"Q"}
+    assert web.slice_guids(view, "all") == set(table)
+    assert web.slice_guids(view, "story:99") == {"C", "P"}  # unknown -> flagged
+    assert web.slice_guids(view, "nonsense") == {"C", "P"}
 
 
 def test_event_detail_is_short():

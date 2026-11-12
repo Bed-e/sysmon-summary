@@ -131,17 +131,28 @@ SHORT_REASONS = [
 # Portal labels that count as a "portal hit" in a storyline summary.
 PORTAL_HIT_LABELS = ["malicious", "suspicious", "likely_malware", "definitely_malware"]
 
-# Timeline: one lane per kind of event, and three colour groups.
+# Timeline: one row per process, a bar for its lifetime, dots for events.
 EVENT_LANES = {1: "Process start", 3: "Network", 22: "DNS", 11: "File",
                12: "Registry", 13: "Registry", 14: "Registry"}
-LANE_ORDER = ["Registry", "File", "DNS", "Network", "Process start"]
+EVENT_TYPE_COLORS = [  # (event type, dot colour), in legend order
+    ("Process start", "#3b6fd6"),
+    ("Network", "#14a3a3"),
+    ("DNS", "#8a4fd6"),
+    ("File", "#6b6b6b"),
+    ("Registry", "#c9a227"),
+]
 HIGH_SCORE = 40  # a process score at or above this is shown red
 DETAIL_LENGTH = 110  # longest hover text for one event
-TIMELINE_SERIES = [  # (group, legend label, colour, dot size)
-    ("normal", "Normal process (score 0)", "#b0b0b0", 5),
-    ("flagged", "Flagged process (score 1-%d)" % (HIGH_SCORE - 1), "#f0a020", 8),
-    ("high", "High-scoring process (score %d+)" % HIGH_SCORE, "#d62020", 11),
+SCORE_BARS = [  # (score level, legend label, bar colour)
+    ("normal", "Process, score 0", "#cfcfcf"),
+    ("flagged", "Process, score 1-%d" % (HIGH_SCORE - 1), "#f0a020"),
+    ("high", "Process, score %d+" % HIGH_SCORE, "#d62020"),
 ]
+STORYLINE_CHOICES = 20  # storylines offered in the timeline dropdown
+ROWS_VISIBLE = 40       # rows shown at once; more rows get a scroll slider
+ROW_HEIGHT = 24         # pixels per process row
+LABEL_WIDTH = 260       # pixels for the left-aligned process names
+INDENT = "   "  # non-breaking spaces: ECharts keeps them
 
 
 NOT_A_VERDICT = ("Scores are policy numbers, not a verdict. Local scores order "
@@ -736,7 +747,7 @@ def summary_caption(summary):
 def event_lane(event):
     """Return the timeline lane for one event: "Process start", "Network",
     "DNS", "File" or "Registry" (see EVENT_LANES). Used by
-    make_timeline_points."""
+    make_process_timeline."""
     return EVENT_LANES.get(event["event_id"], "Other")
 
 
@@ -746,7 +757,7 @@ def event_detail(event):
     Input: one event dict from parse.read_events.
     Output: text such as "onedrivesetup.exe → 20.205.115.102:443" or
     "cmd.exe queried example.com", cut to DETAIL_LENGTH characters.
-    Used by: make_timeline_points.
+    Used by: make_process_timeline.
     """
     who = file_name(event.get("Image", "")) or "unknown process"
     event_id = event["event_id"]
@@ -770,7 +781,7 @@ def time_in_ms(text):
     """Turn Sysmon's time text into milliseconds since 1970 (UTC), or None.
 
     Uses scoring.parse_time. Sysmon times are UTC, so calendar.timegm is
-    used (not the local time zone). Used by: make_timeline_points.
+    used (not the local time zone). Used by: process_spans and make_process_timeline.
     """
     moment = parse_time(text)
     if moment is None:
@@ -781,7 +792,7 @@ def time_in_ms(text):
 def score_level(score):
     """Return "normal" (0 or less), "flagged" (1 to HIGH_SCORE-1) or "high".
 
-    Used by: make_timeline_points to pick the colour of a point.
+    Used by: make_process_timeline to pick the colour of a bar.
     """
     if score <= 0:
         return "normal"
@@ -790,54 +801,214 @@ def score_level(score):
     return "high"
 
 
-def make_timeline_points(events, process_scores):
-    """Turn every event into a point on the timeline.
+def process_spans(events):
+    """Find when each process was first and last seen.
 
-    Input: events from parse.read_events; process_scores from
-    scoring.build_process_scores.
-    Output: {"normal": [...], "flagged": [...], "high": [...]}. Each point
-    is {"value": [time in ms, lane], "name": hover text}. The group comes
-    from the local score of the process that made the event, so suspicious
-    processes stand out. Events with an unreadable time are left out.
-    Used by: build_timeline_tab (through make_timeline_option).
+    Input: events from parse.read_events.
+    Output: {guid: {"first": ms, "last": ms, "first_text": "hh:mm:ss",
+    "last_text": "hh:mm:ss"}} over every event carrying that ProcessGuid.
+    Events with no guid or an unreadable time are skipped.
+    Used by: make_process_timeline (the lifetime bars and connectors).
     """
-    points = {"normal": [], "flagged": [], "high": []}
+    spans = {}
     for event in events:
+        guid = event.get("ProcessGuid", "")
         moment = time_in_ms(event.get("time", ""))
-        if moment is None:
+        if not guid or moment is None:
             continue
-        process = process_scores.get(event.get("ProcessGuid", ""))
-        score = process["score"] if process is not None else 0
-        name = "%s  %s" % (event["time"][11:19], event_detail(event))
-        if score > 0:
-            name += "  (process score %d)" % score
-        points[score_level(score)].append({"value": [moment, event_lane(event)],
-                                           "name": name})
-    return points
+        clock_text = event["time"][11:19]
+        span = spans.get(guid)
+        if span is None:
+            spans[guid] = {"first": moment, "last": moment,
+                           "first_text": clock_text, "last_text": clock_text}
+            continue
+        if moment < span["first"]:
+            span["first"] = moment
+            span["first_text"] = clock_text
+        if moment > span["last"]:
+            span["last"] = moment
+            span["last_text"] = clock_text
+    return spans
 
 
-def make_timeline_option(points):
-    """Build the ECharts settings for the timeline chart.
+def flagged_slice(table, process_scores):
+    """Pick the flagged processes and every process above them.
 
-    Input: points from make_timeline_points.
-    Output: a plain dict: time along the bottom (UTC), one row per lane, a
-    legend that can hide a group, a zoom slider, and a hover box that shows
-    each point's text ("{b}" is ECharts' plain placeholder for the name, not
-    code). Grey = normal, orange = flagged, red = high.
-    Used by: build_timeline_tab.
+    Input: table from storylines.build_storylines; process_scores from
+    scoring.build_process_scores.
+    Output: a set of guids: each process with a local score above 0, plus
+    its parent, grandparent and so on (walking parent_guid while the parent
+    is in the table), so each flagged process is shown with what started it.
+    Stops after MAX_DEPTH steps in case of a malformed parent loop.
+    Used by: slice_guids (the default timeline view).
     """
+    chosen = set()
+    for guid, process in process_scores.items():
+        if process["score"] <= 0 or guid not in table:
+            continue
+        current = guid
+        steps = 0
+        while current in table and current not in chosen and steps < MAX_DEPTH:
+            chosen.add(current)
+            current = table[current]["parent_guid"]
+            steps += 1
+    return chosen
+
+
+def storyline_slice(stories, number):
+    """Return the set of guids in storyline `number` (1-based).
+
+    Input: stories from storylines.build_storylines; number, a rank.
+    Output: the guids of that storyline's process tree.
+    Used by: slice_guids.
+    """
+    return set(stories["storylines"][number - 1]["guids"])
+
+
+def order_rows(table, guids):
+    """Put the chosen processes in tree order, one row each.
+
+    Input: table from storylines.build_storylines; guids, the chosen set.
+    Output: a list of (guid, depth). A chosen process whose parent is not
+    chosen is a root (depth 0). Roots, and the children under each process,
+    are sorted by start time. A process is never listed twice.
+    Used by: draw_process_timeline.
+    """
+    chosen = set()
+    for guid in guids:
+        if guid in table:
+            chosen.add(guid)
+    roots = [guid for guid in chosen if table[guid]["parent_guid"] not in chosen]
+    roots.sort(key=lambda guid: table[guid]["time"])
+    rows = []
+    seen = set()
+    stack = [(guid, 0) for guid in reversed(roots)]
+    while stack:
+        guid, depth = stack.pop()
+        if guid in seen:
+            continue
+        seen.add(guid)
+        rows.append((guid, depth))
+        children = [child for child in table[guid]["children"] if child in chosen]
+        children.sort(key=lambda child: table[child]["time"])
+        for child in reversed(children):
+            stack.append((child, depth + 1))
+    return rows
+
+
+def row_label(table, guid, depth, process_scores):
+    """Return the y-axis text for one process row.
+
+    Input: table; guid; depth from order_rows; process_scores.
+    Output: e.g. "      └ onedrivesetup.exe  (60)": indented by depth, the
+    file name, and the local score when it is above 0.
+    Used by: make_process_timeline.
+    """
+    name = file_name(table[guid]["image"]) or "unknown process"
+    process = process_scores.get(guid)
+    score = process["score"] if process is not None else 0
+    text = INDENT * depth + ("└ " if depth else "") + name
+    if score > 0:
+        text += "  (%d)" % score
+    return text
+
+
+def make_process_timeline(table, rows, spans, events, process_scores):
+    """Build the ECharts settings for the per-process timeline.
+
+    Input: table; rows from order_rows; spans from process_spans; events
+    from parse.read_events; process_scores.
+    Output: a plain settings dict:
+    - one y-axis row per process, top to bottom in tree order;
+    - a thick bar per process from its first to its last event, coloured by
+      its local score (grey 0, orange 1-39, red 40+), as three "lines"
+      series so the legend can hide each group;
+    - a dashed vertical connector at each child's first event, from the
+      parent's row to the child's row;
+    - a dot per event on its process's row, one series per event type;
+    - hover text through ECharts' "{b}" placeholder (the item's name);
+    - a time zoom slider, and a row scroll slider when there are more than
+      ROWS_VISIBLE rows;
+    - process names left-aligned in a LABEL_WIDTH column so the tree
+      indentation shows (long names are cut with "...").
+    Rows are placed by number, so two processes with the same name stay
+    apart. Used by: draw_process_timeline.
+    """
+    index = {}
+    labels = []
+    for position, (guid, depth) in enumerate(rows):
+        index[guid] = position
+        labels.append(row_label(table, guid, depth, process_scores))
+
+    bars = {"normal": [], "flagged": [], "high": []}
+    links = []
+    for guid, position in index.items():
+        span = spans.get(guid)
+        if span is None:
+            continue
+        process = process_scores.get(guid)
+        score = process["score"] if process is not None else 0
+        name = file_name(table[guid]["image"]) or "unknown process"
+        text = "%s  %s to %s" % (name, span["first_text"], span["last_text"])
+        if score > 0:
+            text += "  (score %d)" % score
+        bars[score_level(score)].append(
+            {"coords": [[span["first"], position], [span["last"], position]],
+             "name": text})
+        parent = table[guid]["parent_guid"]
+        if parent in index:
+            parent_name = file_name(table[parent]["image"]) or "unknown process"
+            links.append({"coords": [[span["first"], index[parent]],
+                                     [span["first"], position]],
+                          "name": "%s %s started %s" % (span["first_text"],
+                                                        parent_name, name)})
+
+    dots = {}
+    for lane, color in EVENT_TYPE_COLORS:
+        dots[lane] = []
+    for event in events:
+        position = index.get(event.get("ProcessGuid", ""))
+        moment = time_in_ms(event.get("time", ""))
+        if position is None or moment is None:
+            continue
+        lane = event_lane(event)
+        if lane in dots:
+            dots[lane].append({"value": [moment, position],
+                               "name": "%s  %s" % (event["time"][11:19],
+                                                   event_detail(event))})
+
     series = []
-    for key, label, color, size in TIMELINE_SERIES:
-        series.append({"name": label, "type": "scatter", "symbolSize": size,
-                       "itemStyle": {"color": color}, "data": points[key]})
+    for level, label, color in SCORE_BARS:
+        series.append({"name": label, "type": "lines",
+                       "coordinateSystem": "cartesian2d", "z": 1,
+                       "lineStyle": {"color": color, "width": 9, "opacity": 0.7,
+                                     "cap": "round"},
+                       "data": bars[level]})
+    series.append({"name": "Parent → child", "type": "lines",
+                   "coordinateSystem": "cartesian2d", "z": 2,
+                   "lineStyle": {"color": "#555555", "width": 1.5, "type": "dashed"},
+                   "data": links})
+    for lane, color in EVENT_TYPE_COLORS:
+        series.append({"name": lane, "type": "scatter", "symbolSize": 7, "z": 3,
+                       "itemStyle": {"color": color}, "data": dots[lane]})
+
+    zoom = [{"type": "slider", "xAxisIndex": 0, "bottom": 10},
+            {"type": "inside", "xAxisIndex": 0}]
+    if len(rows) > ROWS_VISIBLE:
+        zoom.append({"type": "slider", "yAxisIndex": 0, "right": 5, "width": 14,
+                     "startValue": 0, "endValue": ROWS_VISIBLE - 1})
     return {
         "useUTC": True,
+        "animation": False,
         "tooltip": {"trigger": "item", "formatter": "{b}"},
-        "legend": {"top": 0},
-        "grid": {"left": 110, "right": 30, "top": 40, "bottom": 70},
+        "legend": {"top": 0, "type": "scroll"},
+        "grid": {"left": LABEL_WIDTH, "right": 40, "top": 40, "bottom": 60},
         "xAxis": {"type": "time"},
-        "yAxis": {"type": "category", "data": LANE_ORDER},
-        "dataZoom": [{"type": "slider"}, {"type": "inside"}],
+        "yAxis": {"type": "category", "data": labels, "inverse": True,
+                  "axisLabel": {"interval": 0, "fontSize": 11, "align": "left",
+                                "margin": LABEL_WIDTH - 10, "width": LABEL_WIDTH - 20,
+                                "overflow": "truncate"}},
+        "dataZoom": zoom,
         "series": series,
     }
 
@@ -1169,23 +1340,93 @@ def build_storylines_tab(view):
                  % view["stories"]["events_without_guid"]).classes("text-gray-600")
 
 
+def slice_choices(stories):
+    """Build the entries of the timeline's "Show" dropdown.
+
+    Input: stories from storylines.build_storylines.
+    Output: {value: label}: "flagged" (the default), "story:1" ...
+    "story:20" for the top STORYLINE_CHOICES storylines, and "all".
+    Used by: build_timeline_tab.
+    """
+    choices = {"flagged": "Flagged processes and their parents"}
+    table = stories["table"]
+    for number, storyline in enumerate(stories["storylines"][:STORYLINE_CHOICES], 1):
+        name = file_name(table[storyline["root"]]["image"]) or "unknown process"
+        choices["story:%d" % number] = "Storyline #%d: %s (%d processes)" % (
+            number, name, storyline["size"])
+    choices["all"] = "All processes (%d)" % len(table)
+    return choices
+
+
+def slice_guids(view, choice):
+    """Turn a dropdown value into the set of processes to show.
+
+    Input: view (reads "stories" and "process_scores"); choice, a key of
+    slice_choices. Anything unknown falls back to the flagged slice.
+    Output: a set of guids. Used by: draw_process_timeline.
+    """
+    stories = view["stories"]
+    if choice == "all":
+        return set(stories["table"])
+    if choice.startswith("story:"):
+        number = choice[len("story:"):]
+        if number.isdigit() and 1 <= int(number) <= len(stories["storylines"]):
+            return storyline_slice(stories, int(number))
+    return flagged_slice(stories["table"], view["process_scores"])
+
+
+def draw_process_timeline(view, box, note, choice):
+    """Redraw the timeline chart for one slice.
+
+    Input: view; box, the column that holds the chart; note, a label for the
+    row count; choice, the dropdown value.
+    Output: nothing. Clears the box and draws a new ui.echart from
+    make_process_timeline for the chosen processes, with its height set from
+    the row count (up to ROWS_VISIBLE rows), and updates the note. A new
+    chart is made each time because an existing chart keeps drawing at its
+    old size when only its height changes.
+    Used by: build_timeline_tab (first draw and dropdown changes).
+    """
+    table = view["stories"]["table"]
+    rows = order_rows(table, slice_guids(view, choice))
+    option = make_process_timeline(table, rows, view["spans"],
+                                   view["state"]["events"], view["process_scores"])
+    visible = max(min(len(rows), ROWS_VISIBLE), 3)
+    box.clear()
+    with box:
+        height = visible * ROW_HEIGHT + 130
+        ui.echart(option).classes("w-full").style("height: %dpx" % height)
+    note.text = "%d processes shown." % len(rows)
+
+
 def build_timeline_tab(view):
-    """Draw the Timeline tab: every event on a time chart, then a table of
+    """Draw the Timeline tab: a per-process timeline, then a table of
     flagged processes in the order they first appeared.
 
-    Input: view; reads view["state"]["events"] and view["process_scores"].
-    Output: draws the tab. Uses ui.echart, which ships with NiceGUI (no new
-    library). Used by: report_page.
+    Input: view; reads view["state"]["events"], view["stories"] (built by
+    build_storylines_tab, which is drawn first) and view["process_scores"].
+    Stores view["spans"].
+    Output: draws a "Show" dropdown (flagged processes and their parents,
+    one storyline, or all), the chart and the table. Uses ui.echart, which
+    ships with NiceGUI (no new library). Used by: report_page.
     """
     events = view["state"]["events"]
-    scores = view["process_scores"]
-    ui.label("Each dot is one event. Red and orange dots come from processes "
-             "with a local score (red: %d or more). Drag the slider or scroll "
-             "on the chart to zoom; click a legend entry to hide a group. "
-             "Times are UTC." % HIGH_SCORE).classes("text-sm text-gray-600")
-    ui.echart(make_timeline_option(make_timeline_points(events, scores))) \
-        .classes("w-full").style("height: 420px")
-    rows = make_suspicious_rows(events, scores)
+    view["spans"] = process_spans(events)
+    ui.label("One row per process, in tree order (children under their "
+             "parent). The bar runs from a process's first to its last event "
+             "and is coloured by its local score; dots are its events; dashed "
+             "lines link a parent to each child it started. Hover for details, "
+             "click a legend entry to hide a group, drag the sliders to zoom. "
+             "Times are UTC.").classes("text-sm text-gray-600")
+    with ui.row().classes("items-center"):
+        choice = ui.select(slice_choices(view["stories"]), value="flagged",
+                           label="Show").classes("w-96")
+        note = ui.label().classes("text-sm text-gray-600")
+    box = ui.column().classes("w-full")
+    choice.on_value_change(lambda event: draw_process_timeline(view, box, note, event.value))
+    draw_process_timeline(view, box, note, "flagged")
+
+    rows = make_suspicious_rows(events, view["process_scores"])
     ui.label("Flagged processes, in order of first appearance") \
         .classes("text-xl font-bold mt-4")
     if not rows:
