@@ -3,6 +3,8 @@
 import io
 import threading
 
+from starlette.datastructures import UploadFile
+
 import enrich
 from web import app as web
 
@@ -123,43 +125,81 @@ def test_choose_n():
     assert web.choose_n("5; drop", ranked) is None
 
 
-def test_report_refresh_tag_only_while_running_and_escapes():
-    state = fresh_state([ioc("ip", "8.8.8.8")])
-    state["name"] = "<script>x</script>.evtx"
-    web.UPLOADS["t1"] = state
-    html = web.render_report("t1")
-    assert "http-equiv" not in html and "<script>" not in html
-    assert "not requested" in html
-    state["run"] = "running"
-    state["n"] = 1
-    assert 'http-equiv="refresh"' in web.render_report("t1")
-    state["run"] = "failed"
-    state["error"] = "<b>bad</b>"
-    html = web.render_report("t1")
-    assert "http-equiv" not in html and "<b>bad</b>" not in html
+def test_portal_text_never_shows_a_failure_as_a_score():
+    assert web.portal_text("not requested") == "not requested"
+    failed = enrich.not_enriched(ioc("ip", "1.1.1.1"), "timed out")
+    assert web.portal_text(failed) == "NOT ENRICHED: timed out"
+    ok = {"status": "partial", "score_0_to_100": 50, "label": "suspicious", "reasons": []}
+    assert web.portal_text(ok) == "portal 50 (suspicious) [partial: some sources failed]"
 
 
-def test_routes_reject_bad_input_and_unknown_ids():
-    client = web.app.test_client()
-    assert client.get("/").status_code == 200
-    assert client.get("/report/nope").status_code == 404
-    assert client.post("/enrich/nope", data={"n": "5"}).status_code == 404
-    r = client.post("/upload", data={"dump": (io.BytesIO(b"hi"), "a.txt")})
-    assert r.status_code == 400
-    r = client.post("/upload", data={"dump": (io.BytesIO(b"not evtx"), "a.evtx")})
-    assert r.status_code == 400 and b"not a Windows" in r.data
+def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
+    ranked = [ioc("ip", "1.1.1.1", 30), ioc("dns", "a.example", 20)]
+    answer = {"type": "dns", "value": "a.example", "status": "enriched",
+              "score_0_to_100": 10, "label": "likely_safe", "reasons": []}
+    rows = web.make_ioc_rows(ranked, [answer])
+    assert [r["rank"] for r in rows] == [1, 2]
+    assert rows[0]["portal"] == "not requested"
+    assert rows[1]["portal"] == "portal 10 (likely_safe)"
+    assert rows[0]["why"] == "+30 t"
 
 
-def test_enrich_route_confirm_page_then_start(monkeypatch, tmp_path):
-    started = []
-    monkeypatch.setattr(web, "start_enrichment", lambda *a: started.append(a) or True)
-    monkeypatch.setattr(web, "load_limits", lambda: LIMITS)
-    monkeypatch.setattr(web, "read_daily_count", lambda: 0)
-    web.UPLOADS["t2"] = fresh_state([ioc("hash", "a" * 64) for _ in range(6)])
-    client = web.app.test_client()
-    r = client.post("/enrich/t2", data={"n": "all"})
-    assert b"Send anyway" in r.data and started == []
-    r = client.post("/enrich/t2", data={"n": "all", "confirm": "yes"})
-    assert r.status_code == 302 and len(started) == 1
-    r = client.post("/enrich/t2", data={"n": "5; evil"})
-    assert r.status_code == 400
+def test_make_skipped_rows_sorted():
+    skipped = [{"type": "dns", "value": "b", "reason": "z", "record": {"count": 2}},
+               {"type": "ip", "value": "a", "reason": "a", "record": {"count": 1}}]
+    rows = web.make_skipped_rows(skipped)
+    assert [r["reason"] for r in rows] == ["a", "z"] and rows[0]["count"] == 1
+
+
+def test_counts_and_status():
+    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2")])
+    state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}}, "dns": {}, "hash": {}}
+    ok = {"status": "enriched"}
+    bad = {"status": "not_enriched"}
+    rows = {r["item"]: r["value"] for r in web.make_counts_rows(state, [ok, bad])}
+    assert rows["Looked up on the portals"] == "1"
+    assert rows["Lookup failed (not enriched)"] == "1"
+    assert rows["Not requested"] == "0"
+    assert web.status_text(state) == "No portal has been called yet."
+    state.update(run="running", n=5)
+    state["results"] = [ok]
+    assert web.status_text(state) == "Running: 1 of 2 done."
+    state.update(run="failed", error="boom")
+    assert web.status_text(state) == "Run failed: boom"
+
+
+def test_choose_n():
+    ranked = [ioc("ip", "1.1.1.1")] * 3
+    assert web.choose_n("10", ranked) == 3
+    assert web.choose_n("all", ranked) == 3
+    assert web.choose_n("5; drop", ranked) is None
+
+
+def post(name, data):
+    """Call the upload endpoint directly with a fake uploaded file."""
+    return web.upload_endpoint(UploadFile(io.BytesIO(data), filename=name))
+
+
+def test_upload_endpoint_rejects_bad_input_with_fixed_codes(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "UPLOAD_DIR", str(tmp_path))
+    assert web.upload_endpoint(None).headers["location"] == "/?error=none"
+    assert post("a.txt", b"hi").headers["location"] == "/?error=type"
+    assert post("a.evtx", b"not evtx").headers["location"] == "/?error=magic"
+    monkeypatch.setattr(web, "MAX_UPLOAD_BYTES", 4)
+    assert post("a.evtx", b"ElfFile\x00xxxx").headers["location"] == "/?error=size"
+    assert list(tmp_path.iterdir()) == []  # temp files always removed
+
+
+def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatch, tmp_path):
+    monkeypatch.setattr(web, "UPLOAD_DIR", str(tmp_path))
+    parsed = {"events": [], "dropped_counts": {}, "error_count": 0, "total": 0}
+    monkeypatch.setattr(web, "read_events", lambda path: parsed)
+    def no_network(url, timeout):
+        raise AssertionError("upload must not call a portal")
+    monkeypatch.setattr(enrich, "call_portal", no_network)
+    response = post("../../evil name.evtx", b"ElfFile\x00 body")
+    location = response.headers["location"]
+    assert location.startswith("/report/")
+    state = web.UPLOADS[location.rsplit("/", 1)[1]]
+    assert state["name"] == "evil name.evtx" and state["run"] == "idle"
+    assert state["results"] == [] and list(tmp_path.iterdir()) == []

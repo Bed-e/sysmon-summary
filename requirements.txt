@@ -2,4 +2,4 @@ python-evtx
 requests
 python-dotenv
 pytest
-flask
+nicegui
