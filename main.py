@@ -2,11 +2,16 @@
 
     python main.py my-training-example.evtx day-in-life-events.evtx
 
-M1: parse and collect. M2: skip and rank locally. No API calls yet.
+M1: parse and collect. M2: skip and rank locally. M3: ask the three local
+portals about the top-ranked IOCs (set IP_PORTAL_URL, HASH_PORTAL_URL and
+DNS_PORTAL_URL; use --no-enrich to skip).
 """
 
 import argparse
 
+from dotenv import load_dotenv
+
+from enrich import DEFAULT_CAP, enrich_ranked, load_portal_urls
 from filters import load_config, split_iocs
 from iocs import collect_iocs
 from parse import read_events
@@ -110,12 +115,55 @@ def get_arguments():
         default=10,
         help="how many ranked IOCs to show (default 10)",
     )
+    parser.add_argument(
+        "--cap",
+        type=int,
+        default=DEFAULT_CAP,
+        help="most portal lookups per file (default %d)" % DEFAULT_CAP,
+    )
+    parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        help="skip the portal lookups (local ranking only)",
+    )
     return parser.parse_args()
 
 
+def build_enrichment_summary(results):
+    """Return the portal answers as one string.
+
+    Input: results, the list from enrich.enrich_ranked (rank order).
+    Output: text with the local score beside the portal's score and label,
+    or the reason an IOC was not enriched. Read by the analyst on screen.
+    """
+    lines = ["Enrichment (portal scores are policy numbers, not a verdict):"]
+    if not results:
+        lines.append("  nothing to look up")
+    over_cap = 0
+    for result in results:
+        if result["status"] == "not_enriched" and result["reasons"][0].startswith("over the cap"):
+            over_cap += 1
+        elif result["status"] != "not_enriched":
+            note = " [partial: some sources failed]" if result["status"] == "partial" else ""
+            lines.append("  %-5s %s  local %d | portal %s (%s)%s" % (
+                result["type"], result["value"], result["local_score"],
+                result["score_0_to_100"], result["label"], note))
+            for reason in result["reasons"]:
+                lines.append("          %s" % reason)
+        else:
+            lines.append("  %-5s %s  local %d | NOT ENRICHED: %s" % (
+                result["type"], result["value"], result["local_score"],
+                result["reasons"][0]))
+    if over_cap:
+        lines.append("  %d more IOCs not enriched: over the cap (raise --cap)" % over_cap)
+    return "\n".join(lines)
+
+
 def main():
+    load_dotenv()
     args = get_arguments()
     config = load_config()
+    urls = load_portal_urls()
 
     for path in args.paths:
         parsed = read_events(path)
@@ -126,6 +174,10 @@ def main():
         print()
         print(build_ranking_summary(skipped, ranked, args.top))
         print()
+        if not args.no_enrich:
+            results = enrich_ranked(ranked, urls, args.cap)
+            print(build_enrichment_summary(results))
+            print()
 
 
 if __name__ == "__main__":
