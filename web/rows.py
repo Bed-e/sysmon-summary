@@ -2,7 +2,7 @@
 the tables show, plus the small text helpers those tables use.
 """
 
-from web.config import N_CHOICES, NOT_ENRICHABLE_TEXT
+from web.config import NOT_ENRICHABLE_TEXT
 from web.reasons import portal_text, short_why
 
 
@@ -102,20 +102,6 @@ def make_counts_rows(state, results):
         ("Not requested", max(enrichable - len(results), 0)),
     ]
     return [{"item": label, "value": str(value)} for label, value in pairs]
-
-
-def choose_n(text, ranked):
-    """Turn the dropdown value into a number of IOCs.
-
-    Input: text from the dropdown; ranked, the list.
-    Output: an int (clamped to the list length), or None if text is not one
-    of N_CHOICES. Used by: ask_enrich.
-    """
-    if text not in N_CHOICES:
-        return None
-    if text == "all":
-        return len(ranked)
-    return min(int(text), len(ranked))
 
 
 def count_text(number, word, plural):

@@ -1,11 +1,11 @@
-"""The Overview tab: counts, status and the Enrich next N controls.
+"""The Overview tab: the note and the count tiles.
+(R3 step 4 adds the soft verdict and the top chains, and moves the counts
+to the Stats tab.)
 """
 
 from nicegui import ui
 
-from web.actions import ask_enrich
-from web.config import NOT_A_VERDICT, N_CHOICES
-from web.enrich_jobs import status_text
+from web.config import NOT_A_VERDICT
 from web.rows import make_counts_rows
 
 
@@ -19,7 +19,7 @@ def draw_count_tiles(box, rows):
     Output: nothing. Clears the box and draws one tile per row, as labels
     only (text is never raw HTML).
     Used by: build_overview_tab (first draw) and refresh_view, through
-    view["draw_counts"], on every timer tick while a run is going.
+    view["draw_counts"], on every timer tick while lookups are running.
     """
     box.clear()
     with box:
@@ -33,12 +33,12 @@ def draw_count_tiles(box, rows):
 
 
 def build_overview_tab(view):
-    """Draw the Overview tab: note, count tiles, and the enrich controls.
+    """Draw the Overview tab: the note and the count tiles.
 
     Input: view, the page's dict of live parts (see report_page). This
-    function stores "draw_counts", "status" and "button" in it for
-    refresh_view.
-    Output: draws the tab. The N dropdown and button call ask_enrich.
+    function stores "draw_counts" in it for refresh_view.
+    Output: draws the tab. Lookups are started from the IOCs tab (and, from
+    R3 step 2, from each chain); the progress bar sits above the tabs.
     Used by: report_page.
     """
     state = view["state"]
@@ -46,15 +46,3 @@ def build_overview_tab(view):
     tiles = ui.element("div").classes("count-grid")
     view["draw_counts"] = lambda rows: draw_count_tiles(tiles, rows)
     draw_count_tiles(tiles, make_counts_rows(state, state["results"]))
-    with ui.column().classes("app-card"):
-        ui.label("Enrich on demand").classes("app-title")
-        ui.label("Each press sends the next N highest-ranked IOCs that have "
-                 "not been tried yet, one at a time. Single IOCs can be "
-                 "looked up from the IOCs tab.").classes("app-muted")
-        with ui.row().classes("items-center"):
-            choice = ui.select(N_CHOICES, value="5", label="N").classes("w-32")
-            view["button"] = ui.button(
-                "Enrich next N",
-                on_click=lambda: ask_enrich(view, choice.value))
-        view["status"] = ui.label(status_text(state))
-    view["button"].set_enabled(state["run"] != "running")

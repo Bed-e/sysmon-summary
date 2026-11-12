@@ -21,8 +21,9 @@ def ioc(kind, value, score=10, not_enrichable=""):
 
 def fresh_state(ranked):
     return {"name": "x.evtx", "events": [], "iocs": {"ip": {}, "dns": {}, "hash": {}},
-            "ranked": ranked, "results": [], "run": "idle",
-            "error": "", "run_size": 0, "run_done": 0, "version": 0}
+            "ranked": ranked, "results": [], "version": 0,
+            "queue": [], "queued": set(), "queue_done": 0, "queue_total": 0,
+            "worker": "idle", "error": ""}
 
 
 def fake_portal(monkeypatch, calls):
@@ -53,33 +54,80 @@ def test_daily_count_persists_and_resets_on_new_day(tmp_path):
     assert limits.read_daily_count(p, "2026-01-02") == 0
 
 
-def test_needs_warning():
-    ranked = [ioc("hash", "a" * 64) for _ in range(6)] + [ioc("ip", "8.8.8.8")]
-    assert limits.needs_warning(ranked[:3], LIMITS, 0) == []
-    assert "6 hash lookups" in limits.needs_warning(ranked, LIMITS, 0)[0]
-    assert "Daily budget" in limits.needs_warning(ranked, LIMITS, 499)[-1]
-    assert limits.needs_warning([ioc("ip", "1.1.1.1")], LIMITS, 999) == []
-
-
 def test_seconds_to_wait():
     assert limits.seconds_to_wait(100.0, 110.0, 15.0) == 5.0
     assert limits.seconds_to_wait(100.0, 200.0, 15.0) == 0
 
 
-def test_run_enrichment_only_given_items_in_order_and_paces_hashes(monkeypatch, tmp_path):
+def drain(state, usage, limits=LIMITS, pauses=None, clock=lambda: 1000.0):
+    """Run the queue loop in this thread (no real thread, no real waiting)."""
+    state["worker"] = "running"
+    enrich_jobs.drain_queue(state, URLS, limits, usage,
+                            pause=(pauses.append if pauses is not None else lambda s: None),
+                            clock=clock)
+
+
+def test_queue_is_fifo_and_paces_hashes(monkeypatch, tmp_path):
     calls, pauses = [], []
     fake_portal(monkeypatch, calls)
     monkeypatch.setitem(runtime.LAST_HASH, "time", 0.0)
     ranked = [ioc("hash", "a" * 64), ioc("ip", "8.8.8.8"), ioc("hash", "b" * 64),
               ioc("dns", "never.example")]
     state = fresh_state(ranked)
-    enrich_jobs.run_enrichment(state, ranked[:3], URLS, LIMITS, str(tmp_path / "u.txt"),
-                       pause=pauses.append, clock=lambda: 1000.0)
-    assert state["run"] == "done" and state["run_done"] == 3 and state["version"] == 3
-    assert [r["value"] for r in state["results"]] == ["a" * 64, "8.8.8.8", "b" * 64]
+    assert enrich_jobs.add_to_queue(state, [ranked[2], ranked[0], ranked[1]]) == 3
+    drain(state, str(tmp_path / "u.txt"), pauses=pauses)
+    assert state["worker"] == "idle" and state["queue"] == [] and state["queued"] == set()
+    assert state["queue_done"] == 3 and state["queue_total"] == 3 and state["version"] == 3
+    assert [r["value"] for r in state["results"]] == ["b" * 64, "a" * 64, "8.8.8.8"]
     assert len(calls) == 3 and not any("never" in c for c in calls)
     assert pauses == [15.0]  # second hash waits the full spacing; first is free
     assert limits.read_daily_count(str(tmp_path / "u.txt")) == 2
+
+
+def test_add_to_queue_skips_queued_answered_and_not_enrichable():
+    ranked = [ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9"),
+              ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")]
+    state = fresh_state(ranked)
+    state["results"] = [{"type": "ip", "value": "9.9.9.9", "status": "enriched"}]
+    assert enrich_jobs.add_to_queue(state, ranked) == 1
+    assert enrich_jobs.add_to_queue(state, ranked) == 0  # 8.8.8.8 is already waiting
+    assert [i["value"] for i in state["queue"]] == ["8.8.8.8"]
+    assert state["queue_total"] == 1
+
+
+def test_retry_replaces_a_failed_answer(monkeypatch, tmp_path):
+    calls = []
+    fake_portal(monkeypatch, calls)
+    state = fresh_state([ioc("ip", "8.8.8.8")])
+    enrich_jobs.store_result(state, enrich.not_enriched(state["ranked"][0], "timed out"))
+    assert enrich_jobs.add_to_queue(state, state["ranked"]) == 0  # answered, no retry
+    assert enrich_jobs.add_to_queue(state, state["ranked"], retry=True) == 1
+    drain(state, str(tmp_path / "u.txt"))
+    assert len(state["results"]) == 1 and state["results"][0]["status"] == "enriched"
+
+
+def test_progress_counts_restart_only_when_idle():
+    state = fresh_state([ioc("ip", "1.1.1.%d" % i) for i in range(1, 5)])
+    state.update(queue_done=7, queue_total=7)
+    enrich_jobs.add_to_queue(state, state["ranked"][:1])
+    assert (state["queue_done"], state["queue_total"]) == (0, 1)  # new batch
+    state["worker"] = "running"
+    enrich_jobs.add_to_queue(state, state["ranked"][1:])
+    assert (state["queue_done"], state["queue_total"]) == (0, 4)  # added to the batch
+
+
+def test_items_added_while_draining_are_looked_up(monkeypatch, tmp_path):
+    state = fresh_state([ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9")])
+
+    def fake(item, urls):
+        if item["value"] == "8.8.8.8":
+            enrich_jobs.add_to_queue(state, state["ranked"][1:])  # a press mid-run
+        return {"type": "ip", "value": item["value"], "status": "enriched"}
+    monkeypatch.setattr(enrich_jobs, "enrich_one", fake)
+    enrich_jobs.add_to_queue(state, state["ranked"][:1])
+    drain(state, str(tmp_path / "u.txt"))
+    assert [r["value"] for r in state["results"]] == ["8.8.8.8", "9.9.9.9"]
+    assert state["queue_done"] == 2 and state["queue_total"] == 2
 
 
 def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
@@ -88,47 +136,62 @@ def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
     usage = str(tmp_path / "u.txt")
     limits.add_daily_count(usage)
     state = fresh_state([ioc("hash", "a" * 64), ioc("ip", "8.8.8.8")])
-    enrich_jobs.run_enrichment(state, state["ranked"], URLS, {"hash_per_minute": 4, "hash_per_day": 1},
-                       usage, pause=lambda s: None, clock=lambda: 1.0)
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    drain(state, usage, {"hash_per_minute": 4, "hash_per_day": 1})
     first, second = state["results"]
     assert first["status"] == "not_enriched" and config.BUDGET_REASON in first["reasons"][0]
     assert second["status"] == "enriched"
     assert len(calls) == 1  # only the IP reached a portal
 
 
-def test_thread_crash_sets_failed(monkeypatch, tmp_path):
+def test_thread_crash_sets_failed_and_empties_queue(monkeypatch, tmp_path):
     def boom(item, urls):
         raise RuntimeError("kaboom")
     monkeypatch.setattr(enrich_jobs, "enrich_one", boom)
-    state = fresh_state([ioc("ip", "8.8.8.8")])
-    enrich_jobs.run_enrichment(state, state["ranked"], URLS, LIMITS, str(tmp_path / "u.txt"))
-    assert state["run"] == "failed" and "kaboom" in state["error"]
+    state = fresh_state([ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9")])
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    drain(state, str(tmp_path / "u.txt"))
+    assert state["worker"] == "failed" and "kaboom" in state["error"]
+    assert state["queue"] == [] and state["queued"] == set()
+    assert enrich_jobs.add_to_queue(state, state["ranked"]) == 2  # can press again
 
 
-def test_start_refused_while_running():
+def test_start_worker_refused_while_running_or_empty():
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    state["run"] = "running"
-    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is False
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is False  # empty queue
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    state["worker"] = "running"
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is False
     assert state["results"] == []
 
 
-def test_start_runs_thread_to_done(monkeypatch, tmp_path):
+def test_start_worker_runs_thread_to_idle(monkeypatch):
     calls = []
     fake_portal(monkeypatch, calls)
     state = fresh_state([ioc("ip", "8.8.8.8")])
     state["results"] = [{"type": "dns", "value": "kept.example", "status": "enriched"}]
-    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is True
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is True
     for t in threading.enumerate():
         if t is not threading.current_thread() and t.daemon:
             t.join(5)
-    assert state["run"] == "done" and len(state["results"]) == 2  # earlier kept
+    assert state["worker"] == "idle" and len(state["results"]) == 2  # earlier kept
 
 
-def test_choose_n():
-    ranked = [ioc("ip", "1.1.1.1")] * 3
-    assert rows.choose_n("10", ranked) == 3
-    assert rows.choose_n("all", ranked) == 3
-    assert rows.choose_n("5; drop", ranked) is None
+def test_chain_items_takes_flagged_processes_iocs_in_rank_order():
+    ranked = [ioc("ip", "8.8.8.8"), ioc("dns", "a.example"), ioc("ip", "9.9.9.9"),
+              ioc("hash", "c" * 64)]
+    state = fresh_state(ranked)
+    state["chains"] = {
+        "table": {"R": {"iocs": [("dns", "a.example")]},
+                  "F": {"iocs": [("ip", "9.9.9.9"), ("ip", "8.8.8.8")]},
+                  "G": {"iocs": [("hash", "c" * 64)]}},
+        "chains": [{"root": "R", "guids": ["R", "F", "G"], "flagged": ["F", "G"]}],
+    }
+    shown = [i["value"] for i in enrich_jobs.chain_items(state, 1)]
+    assert shown == ["8.8.8.8", "9.9.9.9", "c" * 64]  # a.example: root is not flagged
+    assert enrich_jobs.chain_items(state, 2) == []
+    assert enrich_jobs.chain_items(state, "1") == []
 
 
 def test_portal_text_never_shows_a_failure_as_a_score():
@@ -168,7 +231,7 @@ def test_make_skipped_rows_sorted():
     assert shown[0]["reason"] == "not sent: internal name" and shown[0]["count"] == 1
 
 
-def test_counts_and_status():
+def test_counts_rows():
     state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"),
                          ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")])
     state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}, "10.0.0.1": {}},
@@ -181,15 +244,18 @@ def test_counts_and_status():
     assert shown["Not requested"] == "0"
     assert shown["Not enrichable (never sent anywhere)"] == "1"
     assert shown["Enrichable"] == "2"
-    assert enrich_jobs.status_text(state) == "No portal has been called yet."
-    state.update(run="running", run_size=5, run_done=1)
-    state["results"] = [ok]
-    assert enrich_jobs.status_text(state) == "Running: 1 of 5 done."
-    state.update(run="done")
-    assert enrich_jobs.status_text(state) == ("Last run finished: 1 looked up. "
-                                      "1 of 2 enrichable IOCs tried so far.")
-    state.update(run="failed", error="boom")
-    assert enrich_jobs.status_text(state).startswith("Run failed: boom.")
+
+
+def test_progress_text_and_value():
+    state = fresh_state([])
+    assert enrich_jobs.progress_text(state) == "" and enrich_jobs.progress_value(state) == 0.0
+    state.update(worker="running", queue_done=1, queue_total=4)
+    assert enrich_jobs.progress_text(state) == "Looking up: 1 of 4 done."
+    assert enrich_jobs.progress_value(state) == 0.25
+    state.update(worker="idle", queue_done=4)
+    assert enrich_jobs.progress_text(state) == "Done: 4 looked up."
+    state.update(worker="failed", error="boom")
+    assert enrich_jobs.progress_text(state).startswith("Lookups stopped: boom.")
 
 
 def post(name, data):
@@ -218,20 +284,8 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
     location = response.headers["location"]
     assert location.startswith("/report/")
     state = runtime.UPLOADS[location.rsplit("/", 1)[1]]
-    assert state["name"] == "evil name.evtx" and state["run"] == "idle"
+    assert state["name"] == "evil name.evtx" and state["worker"] == "idle"
     assert state["results"] == [] and list(tmp_path.iterdir()) == []
-
-
-def test_next_items_skips_tried_including_failures():
-    ranked = [ioc("ip", "1.1.1.%d" % i) for i in range(1, 13)]
-    ranked.insert(2, ioc("ip", "10.0.0.1", not_enrichable="ip_not_public"))
-    state = fresh_state(ranked)
-    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
-    for item in [r for r in ranked if not r["not_enrichable"]][:4]:
-        enrich_jobs.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
-    enrich_jobs.store_result(state, enrich.not_enriched(ranked[5], "timed out"))
-    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
-    assert len(enrich_jobs.next_items(state, 100)) == 7
 
 
 def test_store_result_replaces_a_retry():

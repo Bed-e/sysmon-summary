@@ -11,7 +11,6 @@ USAGE_PATH = os.path.join("data", "hash_usage.txt")
 UPLOAD_DIR = "uploads"
 
 DEFAULT_LIMITS = {"hash_per_minute": 4, "hash_per_day": 500}
-N_CHOICES = ["5", "10", "25", "50", "100", "all"]
 REFRESH_SECONDS = 2
 MAX_DEPTH = 50  # deepest process nesting drawn; stops a malformed parent loop
 
