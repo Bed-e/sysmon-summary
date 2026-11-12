@@ -17,7 +17,7 @@ def ioc(kind, value, score=10):
 def fresh_state(ranked):
     return {"name": "x.evtx", "events": [], "iocs": {"ip": {}, "dns": {}, "hash": {}},
             "skipped": [], "ranked": ranked, "results": [], "run": "idle",
-            "error": "", "n": 0}
+            "error": "", "run_size": 0, "run_done": 0, "version": 0}
 
 
 def fake_portal(monkeypatch, calls):
@@ -50,10 +50,10 @@ def test_daily_count_persists_and_resets_on_new_day(tmp_path):
 
 def test_needs_warning():
     ranked = [ioc("hash", "a" * 64) for _ in range(6)] + [ioc("ip", "8.8.8.8")]
-    assert web.needs_warning(ranked, 3, LIMITS, 0) == []
-    assert "6 hash lookups" in web.needs_warning(ranked, 7, LIMITS, 0)[0]
-    assert "Daily budget" in web.needs_warning(ranked, 7, LIMITS, 499)[-1]
-    assert web.needs_warning([ioc("ip", "1.1.1.1")], 1, LIMITS, 999) == []
+    assert web.needs_warning(ranked[:3], LIMITS, 0) == []
+    assert "6 hash lookups" in web.needs_warning(ranked, LIMITS, 0)[0]
+    assert "Daily budget" in web.needs_warning(ranked, LIMITS, 499)[-1]
+    assert web.needs_warning([ioc("ip", "1.1.1.1")], LIMITS, 999) == []
 
 
 def test_seconds_to_wait():
@@ -61,16 +61,16 @@ def test_seconds_to_wait():
     assert web.seconds_to_wait(100.0, 200.0, 15.0) == 0
 
 
-def test_run_enrichment_only_top_n_in_order_and_paces_hashes(monkeypatch, tmp_path):
+def test_run_enrichment_only_given_items_in_order_and_paces_hashes(monkeypatch, tmp_path):
     calls, pauses = [], []
     fake_portal(monkeypatch, calls)
     monkeypatch.setitem(web.LAST_HASH, "time", 0.0)
     ranked = [ioc("hash", "a" * 64), ioc("ip", "8.8.8.8"), ioc("hash", "b" * 64),
               ioc("dns", "never.example")]
     state = fresh_state(ranked)
-    web.run_enrichment(state, 3, URLS, LIMITS, str(tmp_path / "u.txt"),
+    web.run_enrichment(state, ranked[:3], URLS, LIMITS, str(tmp_path / "u.txt"),
                        pause=pauses.append, clock=lambda: 1000.0)
-    assert state["run"] == "done"
+    assert state["run"] == "done" and state["run_done"] == 3 and state["version"] == 3
     assert [r["value"] for r in state["results"]] == ["a" * 64, "8.8.8.8", "b" * 64]
     assert len(calls) == 3 and not any("never" in c for c in calls)
     assert pauses == [15.0]  # second hash waits the full spacing; first is free
@@ -83,7 +83,7 @@ def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
     usage = str(tmp_path / "u.txt")
     web.add_daily_count(usage)
     state = fresh_state([ioc("hash", "a" * 64), ioc("ip", "8.8.8.8")])
-    web.run_enrichment(state, 2, URLS, {"hash_per_minute": 4, "hash_per_day": 1},
+    web.run_enrichment(state, state["ranked"], URLS, {"hash_per_minute": 4, "hash_per_day": 1},
                        usage, pause=lambda s: None, clock=lambda: 1.0)
     first, second = state["results"]
     assert first["status"] == "not_enriched" and web.BUDGET_REASON in first["reasons"][0]
@@ -96,14 +96,14 @@ def test_thread_crash_sets_failed(monkeypatch, tmp_path):
         raise RuntimeError("kaboom")
     monkeypatch.setattr(web, "enrich_one", boom)
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    web.run_enrichment(state, 1, URLS, LIMITS, str(tmp_path / "u.txt"))
+    web.run_enrichment(state, state["ranked"], URLS, LIMITS, str(tmp_path / "u.txt"))
     assert state["run"] == "failed" and "kaboom" in state["error"]
 
 
 def test_start_refused_while_running():
     state = fresh_state([ioc("ip", "8.8.8.8")])
     state["run"] = "running"
-    assert web.start_enrichment(state, 1, URLS, LIMITS) is False
+    assert web.start_enrichment(state, state["ranked"], URLS, LIMITS) is False
     assert state["results"] == []
 
 
@@ -111,11 +111,12 @@ def test_start_runs_thread_to_done(monkeypatch, tmp_path):
     calls = []
     fake_portal(monkeypatch, calls)
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    assert web.start_enrichment(state, 1, URLS, LIMITS) is True
+    state["results"] = [{"type": "dns", "value": "kept.example", "status": "enriched"}]
+    assert web.start_enrichment(state, state["ranked"], URLS, LIMITS) is True
     for t in threading.enumerate():
         if t is not threading.current_thread() and t.daemon:
             t.join(5)
-    assert state["run"] == "done" and len(state["results"]) == 1
+    assert state["run"] == "done" and len(state["results"]) == 2  # earlier kept
 
 
 def test_choose_n():
@@ -141,7 +142,10 @@ def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
     assert [r["rank"] for r in rows] == [1, 2]
     assert rows[0]["portal"] == "not requested"
     assert rows[1]["portal"] == "portal 10 (likely_safe)"
-    assert rows[0]["why"] == "+30 t"
+    assert rows[0]["why"] == "t" and rows[0]["full_why"] == "+30 t"
+    assert rows[0]["action"] == "Look up" and rows[1]["action"] == ""
+    failed = enrich.not_enriched(ranked[0], "timed out")
+    assert web.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
 
 
 def test_make_skipped_rows_sorted():
@@ -161,11 +165,14 @@ def test_counts_and_status():
     assert rows["Lookup failed (not enriched)"] == "1"
     assert rows["Not requested"] == "0"
     assert web.status_text(state) == "No portal has been called yet."
-    state.update(run="running", n=5)
+    state.update(run="running", run_size=5, run_done=1)
     state["results"] = [ok]
-    assert web.status_text(state) == "Running: 1 of 2 done."
+    assert web.status_text(state) == "Running: 1 of 5 done."
+    state.update(run="done")
+    assert web.status_text(state) == ("Last run finished: 1 looked up. "
+                                      "1 of 2 ranked IOCs tried so far.")
     state.update(run="failed", error="boom")
-    assert web.status_text(state) == "Run failed: boom"
+    assert web.status_text(state).startswith("Run failed: boom.")
 
 
 def test_choose_n():
@@ -203,3 +210,126 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
     state = web.UPLOADS[location.rsplit("/", 1)[1]]
     assert state["name"] == "evil name.evtx" and state["run"] == "idle"
     assert state["results"] == [] and list(tmp_path.iterdir()) == []
+
+
+def test_next_items_skips_tried_including_failures():
+    ranked = [ioc("ip", "1.1.1.%d" % i) for i in range(1, 13)]
+    state = fresh_state(ranked)
+    assert [i["value"] for i in web.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
+    for item in ranked[:4]:
+        web.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
+    web.store_result(state, enrich.not_enriched(ranked[4], "timed out"))
+    assert [i["value"] for i in web.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
+    assert len(web.next_items(state, 100)) == 7
+
+
+def test_store_result_replaces_a_retry():
+    state = fresh_state([ioc("ip", "8.8.8.8")])
+    web.store_result(state, enrich.not_enriched(state["ranked"][0], "timed out"))
+    web.store_result(state, {"type": "ip", "value": "8.8.8.8", "status": "enriched"})
+    assert len(state["results"]) == 1 and state["results"][0]["status"] == "enriched"
+    assert state["version"] == 2
+
+
+def test_short_reason_covers_every_scoring_phrase():
+    import scoring
+    p = r"C:\Users\bob\AppData\Local\Temp\a.pdf.exe"
+    cases = {
+        "+20 process a.exe: file runs from a user-writable path (%s)" % p: "a.exe runs from a user folder",
+        "+50 process a.exe: double extension (.pdf.exe)": "a.exe has a double extension (.pdf.exe)",
+        "+25 process b.exe: document app started a program (winword.exe -> b.exe)":
+            "b.exe was started by a document app (winword.exe -> b.exe)",
+        "+25 process c.exe: explorer started a program from Temp (explorer.exe -> c.exe)":
+            "c.exe was started by explorer from Temp",
+        "+25 process d.exe: service started a program from a user-writable path (x)":
+            "d.exe was started by a service from a user folder",
+        r"+40 process e.exe: writes an autorun registry key (HKU\x\Run\y)": "e.exe sets an autorun registry key",
+        "+15 process f.exe: 7 failed DNS lookups from one process": "f.exe made 7 failed DNS lookups",
+        "+20 connection from an unexpected process (%s)" % p: "contacted by an unexpected program",
+        "+10 unusual destination port (8080)": "unusual port (8080)",
+        "+25 regular timing: 6 connections about 60 s apart": "possible beaconing (6 connections about 60 s apart)",
+        "+20 very long label (40 characters)": "very long DNS label",
+        "+20 high-entropy label (x7f9q2kz0pl3)": "random-looking DNS label",
+        "+30 looks like microsoft.com": "looks like microsoft.com",
+        "+40 registry references this file's path (%s)" % p: "an autorun key points to this file",
+        "-15 all copies run from protected system paths (weak evidence)":
+            "only seen in system folders (lowers the score)",
+        "+5 something new (detail)": "something new",
+    }
+    for text, short in cases.items():
+        assert web.short_reason(text) == short, text
+    # The real scoring code still writes these phrases (guards against drift).
+    assert scoring.path_signals(p)[0][1].startswith("file runs from a user-writable path")
+    assert scoring.path_signals(p)[1][1].startswith("double extension")
+    assert scoring.failed_lookup_signal(9)[0][1].endswith("failed DNS lookups from one process")
+    assert scoring.dns_signals("x" * 40 + ".com", [])[0][1].startswith("very long label")
+    assert scoring.trusted_path_adjustment([r"c:\windows\a.exe"], [r"c:\windows"])[0][1] \
+        .startswith("all copies run from protected system paths")
+    assert web.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
+    assert web.short_why([
+        "+20 connection from an unexpected process (x)",
+        "+20 process a.exe: file runs from a user-writable path (x)",
+        "+40 process a.exe: writes an autorun registry key (k)",
+        "+20 process b.exe: file runs from a user-writable path (y)",
+    ]) == ("contacted by an unexpected program · a.exe runs from a user folder "
+           "and sets an autorun registry key · b.exe runs from a user folder")
+
+
+def process_entry(image, time="2023-12-14 03:42:00", **lists):
+    entry = {"image": image, "time": time, "ips": [], "dns": [], "files": [],
+             "registry": [], "iocs": []}
+    entry.update(lists)
+    return entry
+
+
+def test_summarize_storyline_and_caption():
+    hit = {"status": "enriched", "label": "malicious", "score_0_to_100": 90, "reasons": []}
+    table = {
+        "A": process_entry(r"C:\x\a.exe", ips=["1.2.3.4:443"], files=["f1", "f2"]),
+        "B": process_entry(r"C:\x\b.exe", "2023-12-14 04:10:00", dns=["e.example"],
+                           registry=["k"], iocs=[{"type": "ip", "value": "1.2.3.4", "portal": hit}]),
+    }
+    scores = {"B": {"image": r"C:\x\b.exe", "score": 40,
+                    "signals": [(40, "writes an autorun registry key (k)")]},
+              "A": {"image": r"C:\x\a.exe", "score": 0, "signals": []}}
+    summary = web.summarize_storyline(table, {"guids": ["A", "B"]}, scores)
+    assert summary["flagged"] == [{"name": "b.exe", "score": 40, "why": "sets an autorun registry key"}]
+    assert summary["portal_hits"] == ["ip 1.2.3.4: portal 90 (malicious)"]
+    assert web.summary_caption(summary) == (
+        "2 processes · 1 flagged · 1 portal hit · 1 remote address · 1 DNS name · "
+        "2 files · 1 registry write · 03:42–04:10")
+
+
+def test_timeline_points_split_by_process_score():
+    events = [
+        {"event_id": 1, "time": "2023-12-14 03:42:39.407084+00:00", "ProcessGuid": "A",
+         "Image": r"C:\x\a.exe", "CommandLine": "a.exe /go"},
+        {"event_id": 3, "time": "2023-12-14 03:43:00.000000+00:00", "ProcessGuid": "B",
+         "Image": r"C:\x\b.exe", "DestinationIp": "1.2.3.4", "DestinationPort": "443"},
+        {"event_id": 22, "time": "bad time", "ProcessGuid": "B", "Image": "", "QueryName": "q"},
+    ]
+    scores = {"B": {"image": r"C:\x\b.exe", "score": 45, "signals": [(45, "x")]}}
+    points = web.make_timeline_points(events, scores)
+    assert len(points["normal"]) == 1 and len(points["high"]) == 1 and points["flagged"] == []
+    assert points["normal"][0]["value"] == [1702525359407, "Process start"]
+    assert points["high"][0]["name"] == "03:43:00  b.exe → 1.2.3.4:443  (process score 45)"
+    option = web.make_timeline_option(points)
+    assert option["useUTC"] is True and len(option["series"]) == 3
+    rows = web.make_suspicious_rows(events, scores)
+    assert [(r["process"], r["time"]) for r in rows] == [("b.exe", "2023-12-14 03:43:00")]
+
+
+def test_event_detail_is_short():
+    event = {"event_id": 11, "Image": r"C:\x\a.exe", "TargetFilename": "C:\\" + "y" * 300}
+    text = web.event_detail(event)
+    assert text.startswith("a.exe wrote") and len(text) == web.DETAIL_LENGTH
+
+
+def test_storyline_why_is_short():
+    reasons = ["ip 1.2.3.4: +20 connection from an unexpected process (x)",
+               "ip 1.2.3.4: +40 process a.exe: writes an autorun registry key (k)",
+               "highest of 28 scored items in this tree"]
+    assert web.storyline_why(reasons) == (
+        "ip 1.2.3.4: contacted by an unexpected program · a.exe sets an autorun registry key")
+    assert web.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
+        == "b.exe runs from a user folder"
