@@ -74,6 +74,13 @@ body, .q-page { background: var(--app-bg); color: var(--app-text); }
 .upload-button { padding: 0.65rem 1rem; border: 0; border-radius: 8px; cursor: pointer;
   background: var(--app-primary); color: #ffffff; font-weight: 600; font-size: 1rem; }
 .upload-button:hover { filter: brightness(1.1); }
+.count-grid { display: grid; gap: 0.75rem; width: 100%;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
+.count-tile { background: var(--app-card); border: 1px solid var(--app-border);
+  border-radius: 12px; padding: 0.75rem 1rem; gap: 0.1rem; box-shadow: var(--app-shadow); }
+.count-value { font-size: 1.9rem; font-weight: 700; line-height: 1.1; }
+.count-title { font-weight: 600; }
+.app-card .q-tab-panels { background: transparent; }
 .app-notice { background: var(--app-warn-bg); border-left: 4px solid var(--app-warn-border);
   border-radius: 8px; padding: 0.5rem 1rem; width: 100%; }
 .app-title { font-size: 1.15rem; font-weight: 700; }
