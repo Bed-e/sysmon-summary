@@ -273,7 +273,12 @@ Small flat modules, each with plain functions:
 | `storylines.py` | build process chains from `ProcessGuid` |
 | `report.py` | write the HTML |
 | `main.py` | command line: dump in, report out |
-| `web/app.py` | the NiceGUI app (tabs, timeline), the upload endpoint, the enrich thread and its shared state (M5 only) |
+| `web/app.py` | the NiceGUI entry point: registers the routes and starts the server (M5 only) |
+| `web/pages.py`, `web/upload.py`, `web/actions.py` | the two pages, the upload endpoint, and the buttons' actions (M5 only) |
+| `web/tabs/` | one module per tab: Overview, IOCs, Storylines, Timeline, Skipped (M5 only) |
+| `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | the enrich thread, the hash limits and daily count, and the shared state (M5 only) |
+| `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, table rows, storyline summaries and timeline data for the tabs; no UI code (M5 only) |
+| `web/config.py` | the web app's constants, columns and colours (M5 only) |
 | `data/api_limits.txt` | per-minute and per-day hash lookup limits for the web app (M5 only) |
 | `data/hash_usage.txt` | today's hash lookup count, written by the web app, gitignored (M5 only) |
 

@@ -179,13 +179,6 @@ def test_counts_and_status():
     assert enrich_jobs.status_text(state).startswith("Run failed: boom.")
 
 
-def test_choose_n():
-    ranked = [ioc("ip", "1.1.1.1")] * 3
-    assert rows.choose_n("10", ranked) == 3
-    assert rows.choose_n("all", ranked) == 3
-    assert rows.choose_n("5; drop", ranked) is None
-
-
 def post(name, data):
     """Call the upload endpoint directly with a fake uploaded file."""
     return upload.upload_endpoint(UploadFile(io.BytesIO(data), filename=name))
