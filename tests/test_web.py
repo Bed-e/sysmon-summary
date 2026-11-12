@@ -226,28 +226,66 @@ def test_not_enrichable_row_shows_reason_and_no_button():
     assert shown[0]["action"] == "" and shown[0]["not_enrichable"] is True
 
 
-def test_make_skipped_rows_sorted():
-    ranked = [ioc("dns", "b.local", not_enrichable="dns_internal"),
-              ioc("ip", "8.8.8.8"),
-              ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")]
-    shown = rows.make_skipped_rows(ranked)
-    assert [r["value"] for r in shown] == ["b.local", "10.0.0.1"]
-    assert shown[0]["reason"] == "not sent: internal name" and shown[0]["count"] == 1
-
-
-def test_counts_rows():
-    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"),
+def test_lookup_stats():
+    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"), ioc("ip", "3.3.3.3"),
                          ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")])
-    state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}, "10.0.0.1": {}},
-                     "dns": {}, "hash": {}}
     ok = {"status": "enriched"}
+    part = {"status": "partial"}
     bad = {"status": "not_enriched"}
-    shown = {r["item"]: r["value"] for r in rows.make_counts_rows(state, [ok, bad])}
-    assert shown["Looked up on the portals"] == "1"
-    assert shown["Lookup failed (not enriched)"] == "1"
-    assert shown["Not requested"] == "0"
-    assert shown["Not enrichable (never sent anywhere)"] == "1"
-    assert shown["Enrichable"] == "2"
+    shown = {r["item"]: r["value"] for r in rows.lookup_stats(state, [ok, part, bad])}
+    assert shown == {"Looked up on the portals": "2", "Lookup failed (not enriched)": "1",
+                     "Not requested": "0"}
+    shown = {r["item"]: r["value"] for r in rows.lookup_stats(state, [])}
+    assert shown["Not requested"] == "3"
+
+
+def test_ioc_stats_counts_each_not_enrichable_reason():
+    state = fresh_state([ioc("ip", "8.8.8.8"),
+                         ioc("ip", "10.0.0.1", not_enrichable="ip_not_public"),
+                         ioc("ip", "10.0.0.2", not_enrichable="ip_not_public"),
+                         ioc("dns", "dc1.corp", not_enrichable="dns_internal")])
+    state["iocs"] = {"ip": {"8.8.8.8": {}, "10.0.0.1": {}, "10.0.0.2": {}},
+                     "dns": {"dc1.corp": {}}, "hash": {}}
+    shown = [(r["item"], r["value"]) for r in rows.ioc_stats(state)]
+    assert shown == [("IOCs found (3 IPs, 1 DNS names, 0 hashes)", "4"),
+                     ("Enrichable", "1"),
+                     ("Not sent: internal name", "1"),
+                     ("Not sent: private or reserved address", "2")]
+
+
+def test_event_stats_kept_dropped_errors_and_no_guid():
+    state = fresh_state([])
+    state["events"] = [{"event_id": 3}, {"event_id": 1}, {"event_id": 3}]
+    state["parse"] = {"dropped_counts": {7: 5, 5: 1}, "error_count": 2, "total": 11}
+    state["chains"] = {"events_without_guid": 4}
+    shown = [(r["item"], r["value"]) for r in rows.event_stats(state)]
+    assert shown == [("Events in the file", "11"), ("Events kept", "3"),
+                     ("Kept: ID 1 (process start)", "1"),
+                     ("Kept: ID 3 (network connection)", "2"),
+                     ("Dropped: ID 5", "1"), ("Dropped: ID 7", "5"),
+                     ("Parse errors", "2"),
+                     ("Events with no ProcessGuid (not in any chain)", "4")]
+
+
+def test_make_verdict_bands():
+    from web.verdict import make_verdict
+    table = {"R": {"image": r"C:\x\a.exe"}}
+    finding = {"guid": "R", "points": 20, "kind": "process", "subject": None,
+               "reason": "double extension (.pdf.exe)"}
+
+    def chains(score):
+        return {"table": table, "other": ["X", "Y"],
+                "chains": [{"root": "R", "score": score, "title_finding": finding,
+                            "guids": ["R"], "flagged": ["R"]}]}
+    assert make_verdict({"table": {}, "chains": [], "other": ["X", "Y"]}) == {
+        "label": "Likely safe", "level": "normal",
+        "reason": "Nothing was flagged in 2 process trees."}
+    assert make_verdict(chains(1))["label"] == "Suspicious"
+    assert make_verdict(chains(config.HIGH_SCORE - 1))["label"] == "Suspicious"
+    top = make_verdict(chains(config.HIGH_SCORE))
+    assert top["label"] == "Likely compromised" and top["level"] == "high"
+    assert top["reason"] == ("Strongest chain: #1 a.exe — has a double extension "
+                             "(.pdf.exe), score %d." % config.HIGH_SCORE)
 
 
 def test_progress_text_and_value():
@@ -289,6 +327,7 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
     assert location.startswith("/report/")
     state = runtime.UPLOADS[location.rsplit("/", 1)[1]]
     assert state["name"] == "evil name.evtx" and state["worker"] == "idle"
+    assert state["parse"] == {"dropped_counts": {}, "error_count": 0, "total": 0}
     assert state["results"] == [] and list(tmp_path.iterdir()) == []
 
 

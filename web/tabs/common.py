@@ -17,8 +17,7 @@ def build_show_more(draw, total_fn, step=SHOW_STEP):
     Output: a redraw() function. Calling it redraws with the current limit
     and updates the label and button (used when the data changes). The
     button hides once everything is shown.
-    Used by: build_ioc_tab, build_chains_tab, build_other_activity and
-    build_skipped_tab.
+    Used by: build_ioc_tab, build_chains_tab and build_other_activity.
     """
     box = {"limit": step}
     label = ui.label().classes("app-muted")

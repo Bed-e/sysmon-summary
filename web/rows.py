@@ -1,9 +1,9 @@
-"""Row builders: turn ranked IOCs, skipped IOCs and results into the plain dicts
-the tables show, plus the small text helpers those tables use.
+"""Row builders: turn ranked IOCs, results and upload counts into the plain
+dicts the IOCs table and the Stats tiles show, plus small text helpers.
 """
 
 from scoring.paths import file_name
-from web.config import NOT_ENRICHABLE_TEXT, SEEN_IN_NAMES
+from web.config import EVENT_ID_NAMES, NOT_ENRICHABLE_TEXT, SEEN_IN_NAMES
 from web.reasons import portal_text, why_lines
 
 
@@ -106,55 +106,86 @@ def answers_by_ioc(results):
     return answers
 
 
-def make_skipped_rows(ranked):
-    """Build the rows of the not-enrichable audit table.
+def stat(label, value):
+    """Return one Stats tile {item, value}. Used by the *_stats functions."""
+    return {"item": label, "value": str(value)}
 
-    Input: ranked (scoring.rank_iocs); only items with a not_enrichable tag
-    are used.
-    Output: a list of dicts {reason, type, value, count} sorted by reason,
-    type, value, so the analyst can audit the rules. reason is the plain
-    text from NOT_ENRICHABLE_TEXT. Used by: build_skipped_tab.
+
+def event_id_label(event_id):
+    """Return "ID 1 (process start)", or "ID 7" for an ID with no short name.
+    Used by event_stats."""
+    name = EVENT_ID_NAMES.get(event_id)
+    return "ID %s (%s)" % (event_id, name) if name else "ID %s" % event_id
+
+
+def event_stats(state):
+    """Count what happened to the events of one dump.
+
+    Input: state, an UPLOADS entry: "parse" (dropped_counts, error_count,
+    total, kept from parse.read_events by make_state), "events" (the kept
+    events) and "chains" (events_without_guid from build_chains).
+    Output: a list of {item, value} tiles: events in the file, events kept,
+    one tile per kept event ID, one per dropped event ID, parse errors, and
+    events with no ProcessGuid. IDs are in number order.
+    Used by: build_stats_tab (the Events card).
     """
-    blocked = [item for item in ranked if item["not_enrichable"]]
-    rows = []
-    for item in sorted(blocked, key=lambda s: (s["not_enrichable"], s["type"], s["value"])):
-        rows.append({"reason": NOT_ENRICHABLE_TEXT.get(item["not_enrichable"],
-                                                       item["not_enrichable"]),
-                     "type": item["type"], "value": item["value"],
-                     "count": item["record"]["count"]})
-    return rows
+    parse = state["parse"]
+    kept = {}
+    for event in state["events"]:
+        kept[event["event_id"]] = kept.get(event["event_id"], 0) + 1
+    tiles = [stat("Events in the file", parse["total"]),
+             stat("Events kept", len(state["events"]))]
+    for event_id in sorted(kept):
+        tiles.append(stat("Kept: " + event_id_label(event_id), kept[event_id]))
+    for event_id in sorted(parse["dropped_counts"]):
+        tiles.append(stat("Dropped: " + event_id_label(event_id),
+                          parse["dropped_counts"][event_id]))
+    tiles.append(stat("Parse errors", parse["error_count"]))
+    tiles.append(stat("Events with no ProcessGuid (not in any chain)",
+                      state["chains"]["events_without_guid"]))
+    return tiles
 
 
-def make_counts_rows(state, results):
-    """Build the counts shown on the Overview tab.
+def ioc_stats(state):
+    """Count the IOCs of one dump and why some are never sent.
 
-    Input: state (an UPLOADS entry: iocs, ranked); results, the portal
-    answers so far (one per IOC: store_result never duplicates).
-    Output: a list of {item, value}: IOCs found, not enrichable (never sent
-    anywhere), enrichable, looked up, lookup failed, and not requested.
-    Used by: build_overview_tab and refresh_view.
+    Input: state, an UPLOADS entry: "iocs" (iocs.collect_iocs) and "ranked"
+    (with the not_enrichable tag from filters).
+    Output: a list of {item, value} tiles: IOCs found (by type in the
+    caption), enrichable, then one tile per not-enrichable reason, in the
+    plain words of NOT_ENRICHABLE_TEXT ("not sent: internal name").
+    Used by: build_stats_tab (the IOCs card).
     """
     iocs = state["iocs"]
     found = len(iocs["ip"]) + len(iocs["dns"]) + len(iocs["hash"])
-    looked_up = 0
-    failed = 0
-    for result in results:
-        if result["status"] == "not_enriched":
-            failed += 1
-        else:
-            looked_up += 1
-    blocked = len([item for item in state["ranked"] if item["not_enrichable"]])
-    enrichable = len(state["ranked"]) - blocked
-    pairs = [
-        ("IOCs found (%d IPs, %d DNS names, %d hashes)"
-         % (len(iocs["ip"]), len(iocs["dns"]), len(iocs["hash"])), found),
-        ("Not enrichable (never sent anywhere)", blocked),
-        ("Enrichable", enrichable),
-        ("Looked up on the portals", looked_up),
-        ("Lookup failed (not enriched)", failed),
-        ("Not requested", max(enrichable - len(results), 0)),
-    ]
-    return [{"item": label, "value": str(value)} for label, value in pairs]
+    reasons = {}
+    for item in state["ranked"]:
+        if item["not_enrichable"]:
+            reasons[item["not_enrichable"]] = reasons.get(item["not_enrichable"], 0) + 1
+    tiles = [stat("IOCs found (%d IPs, %d DNS names, %d hashes)"
+                  % (len(iocs["ip"]), len(iocs["dns"]), len(iocs["hash"])), found),
+             stat("Enrichable", len(state["ranked"]) - sum(reasons.values()))]
+    for code in sorted(reasons):
+        tiles.append(stat(NOT_ENRICHABLE_TEXT.get(code, code).capitalize(), reasons[code]))
+    return tiles
+
+
+def lookup_stats(state, results):
+    """Count the portal lookups so far.
+
+    Input: state, an UPLOADS entry ("ranked", for the enrichable count);
+    results, the portal answers so far (state["results"], copied by the
+    caller; one per IOC, store_result never duplicates).
+    Output: a list of {item, value} tiles: looked up (enriched or partial),
+    lookup failed (not enriched), and enrichable IOCs not requested yet.
+    Used by: build_stats_tab (the Lookups card) and refresh_view, through
+    view["draw_stats"].
+    """
+    failed = len([result for result in results if result["status"] == "not_enriched"])
+    enrichable = len([item for item in state["ranked"] if not item["not_enrichable"]])
+    return [stat("Looked up on the portals", len(results) - failed),
+            stat("Lookup failed (not enriched)", failed),
+            stat("Not requested", max(enrichable - len(results), 0))]
 
 
 def count_text(number, word, plural):

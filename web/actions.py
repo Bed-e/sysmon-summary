@@ -12,7 +12,7 @@ from enrich import load_portal_urls
 from web.enrich_jobs import (add_to_queue, chain_items, progress_text,
                              progress_value, start_worker)
 from web.limits import load_limits
-from web.rows import make_counts_rows
+from web.rows import lookup_stats
 
 
 def enqueue(view, items, retry=False):
@@ -81,15 +81,36 @@ def enrich_chain(view, number):
         enqueue(view, items)
 
 
+def show_chain(view, number):
+    """Handle an Overview "Show in Chains" button.
+
+    Input: view (needs "tabs" and "chain_tab" from report_page, and
+    "open_chains" and "redraw_chains" from build_chains_tab); number, the
+    chain's 1-based rank (the only thing the browser sends).
+    Output: nothing. Marks that card open, redraws the chains so it is
+    drawn open, and switches to the Chains tab. An unknown number is
+    ignored. The Overview lists only the first TOP_CHAINS chains, which are
+    always within the first Show more step of the Chains tab.
+    Used by: draw_top_chains (Overview tab).
+    """
+    chains = view["state"]["chains"]["chains"]
+    if not isinstance(number, int) or number < 1 or number > len(chains):
+        return
+    view["open_chains"].add(number)
+    view["redraw_chains"]()
+    view["tabs"].set_value(view["chain_tab"])
+
+
 def refresh_view(view):
     """Update the page from the shared state. The timer calls this.
 
     Input: view (state and the live parts stored by the build_* functions).
     Output: nothing. Updates the progress bar and its text every tick
-    (hidden while nothing has been queued), and the count tiles. Redraws
-    the IOC rows only when an answer arrived (state["version"] changed) or
-    the worker state changed. When the worker is no longer running it stops
-    the timer and, if the answers changed, redraws the chains once so the
+    (hidden while nothing has been queued), and the Lookups tiles on the
+    Stats tab. Redraws the IOC rows only when an answer arrived
+    (state["version"] changed) or the worker state changed. When the
+    worker is no longer running it stops the timer and, if the answers
+    changed, redraws the chains and the Overview's top chains once so the
     portal answers appear inside them. The chains themselves are never
     rebuilt: they are worked out once at upload.
     Used by: report_page (timer) and enqueue.
@@ -99,7 +120,7 @@ def refresh_view(view):
     view["progress"].set_value(progress_value(state))
     view["progress_text"].text = text
     view["progress_box"].set_visibility(bool(text))
-    view["draw_counts"](make_counts_rows(state, list(state["results"])))
+    view["draw_stats"](lookup_stats(state, list(state["results"])))
     seen = (state["version"], state["worker"])
     if view.get("seen") != seen:
         view["seen"] = seen
@@ -109,3 +130,4 @@ def refresh_view(view):
         if view["chains_version"] != state["version"]:
             view["chains_version"] = state["version"]
             view["redraw_chains"]()
+            view["redraw_overview"]()

@@ -51,13 +51,6 @@ IOC_GRID_COLUMNS = ("3em 3.5em minmax(9em, 16em) 4.5em minmax(14em, 1fr) "
                     "minmax(8em, 12em) minmax(12em, 18em)")
 SEEN_IN_NAMES = 3  # process names shown in the Seen in column before "+N more"
 
-SKIPPED_COLUMNS = [
-    {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
-    {"name": "type", "label": "Type", "field": "type", "align": "left"},
-    {"name": "value", "label": "Value", "field": "value", "align": "left",
-     "style": "white-space: normal; word-break: break-all"},
-    {"name": "count", "label": "Sightings", "field": "count", "align": "left"},
-]
 SUSPICIOUS_COLUMNS = [
     {"name": "time", "label": "First seen (UTC)", "field": "time", "align": "left"},
     {"name": "process", "label": "Process", "field": "process", "align": "left"},
@@ -111,7 +104,13 @@ ROW_HEIGHT = 24         # pixels per process row
 LABEL_WIDTH = 260       # pixels for the left-aligned process names
 INDENT = "   "  # non-breaking spaces: ECharts keeps them
 
+# Overview verdict (design.md section 8): score_level of the highest chain
+# score -> the soft verdict shown. Always "likely"; never "clean" or "safe".
+VERDICT_LABELS = {"normal": "Likely safe", "flagged": "Suspicious",
+                  "high": "Likely compromised"}
+TOP_CHAINS = 3  # chains listed under the verdict on the Overview tab
 
-NOT_A_VERDICT = ("Scores are policy numbers, not a verdict. Local scores order "
-                 "the work; portal scores are shown beside them and are never "
-                 "merged or averaged.")
+# Short names for the Sysmon event IDs on the Stats tab.
+EVENT_ID_NAMES = {1: "process start", 3: "network connection", 11: "file created",
+                  12: "registry key", 13: "registry value", 14: "registry rename",
+                  22: "DNS query"}

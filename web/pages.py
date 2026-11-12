@@ -1,7 +1,8 @@
 """The two pages: the upload page ("/") and the report page ("/report/<id>").
 
-The report page builds the header, the five tabs and the refresh timer; each
-tab's content comes from web/tabs/.
+The report page builds the header, the progress bar, the five tabs (Overview,
+Chains, IOCs, Timeline, Stats) and the refresh timer; each tab's content comes
+from web/tabs/.
 """
 
 from nicegui import ui
@@ -14,7 +15,7 @@ from web.theme import apply_theme, build_header
 from web.tabs.chains import build_chains_tab
 from web.tabs.iocs import build_ioc_tab
 from web.tabs.overview import build_overview_tab
-from web.tabs.skipped import build_skipped_tab
+from web.tabs.stats import build_stats_tab
 from web.tabs.timeline import build_timeline_tab
 
 
@@ -85,20 +86,22 @@ def report_page(upload_id: str):
     with ui.column().classes("app-card"):
         with ui.tabs().classes("w-full") as tabs:
             overview = ui.tab("Overview")
-            iocs = ui.tab("IOCs")
             chain_tab = ui.tab("Chains")
+            iocs = ui.tab("IOCs")
             timeline = ui.tab("Timeline")
-            skipped = ui.tab("Skipped")
+            stats = ui.tab("Stats")
+        view["tabs"] = tabs
+        view["chain_tab"] = chain_tab
         with ui.tab_panels(tabs, value=overview).classes("w-full"):
             with ui.tab_panel(overview).classes("p-0 gap-4"):
                 build_overview_tab(view)
-            with ui.tab_panel(iocs).classes("p-0 gap-4"):
-                build_ioc_tab(view)
             with ui.tab_panel(chain_tab).classes("p-0 gap-4"):
                 build_chains_tab(view)
+            with ui.tab_panel(iocs).classes("p-0 gap-4"):
+                build_ioc_tab(view)
             with ui.tab_panel(timeline).classes("p-0 gap-4"):
                 build_timeline_tab(view)
-            with ui.tab_panel(skipped).classes("p-0 gap-4"):
-                build_skipped_tab(view)
+            with ui.tab_panel(stats).classes("p-0 gap-4"):
+                build_stats_tab(view)
     view["timer"] = ui.timer(REFRESH_SECONDS, lambda: refresh_view(view),
                              active=(state["worker"] == "running"))

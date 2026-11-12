@@ -224,8 +224,10 @@ def make_state(name, parsed):
     Input: name, the uploaded file's base name (shown as a title only);
     parsed, the dict from parse.read_events.
     Output: the state dict {name, events, iocs, process_scores, chains,
-    ranked, results, version} plus the queue fields {queue, queued,
-    queue_done, queue_total, worker, error} (see add_to_queue). Pipeline
+    ranked, results, version, parse} plus the queue fields {queue, queued,
+    queue_done, queue_total, worker, error} (see add_to_queue). parse keeps
+    read_events' dropped_counts, error_count and total for the Stats tab.
+    Pipeline
     steps 2 to 6 run once here (collect, findings, process scores, chains,
     IOC rank with the enrichability tag) and every tab reads the result.
     Enrichment only ever adds to "results"; it never rebuilds the rest.
@@ -241,5 +243,8 @@ def make_state(name, parsed):
     return {"name": name, "events": events, "iocs": iocs,
             "process_scores": process_scores, "chains": chains,
             "ranked": ranked, "results": [], "version": 0,
+            "parse": {"dropped_counts": dict(parsed["dropped_counts"]),
+                      "error_count": parsed["error_count"],
+                      "total": parsed["total"]},
             "queue": [], "queued": set(), "queue_done": 0, "queue_total": 0,
             "worker": "idle", "error": ""}
