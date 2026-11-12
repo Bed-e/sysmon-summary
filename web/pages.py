@@ -10,6 +10,7 @@ from scoring.processes import build_process_scores
 from web.actions import refresh_view
 from web.config import REFRESH_SECONDS, UPLOAD_ERRORS, UPLOAD_FORM
 from web.runtime import UPLOADS
+from web.theme import apply_theme, build_header
 from web.tabs.iocs import build_ioc_tab
 from web.tabs.overview import build_overview_tab
 from web.tabs.skipped import build_skipped_tab
@@ -18,14 +19,16 @@ from web.tabs.timeline import build_timeline_tab
 
 
 def page_setup():
-    """Set the title and force a light page (dark text on a white page).
+    """Set the title, the theme (colours, cards) and draw the top bar.
 
-    Output: nothing. Without it a browser that prefers dark mode shows dark
-    text on a dark canvas. Used by: upload_page and report_page.
+    Output: the theme dict from build_header ("is_dark" and "listeners"), so
+    the report page can hand it to the tabs. The Light/Dark/System toggle in
+    the bar replaces the old forced light page. The page content is centred
+    and width-limited by the theme CSS. Used by: upload_page and report_page.
     """
     ui.page_title("Sysmon summary")
-    ui.dark_mode(False)
-    ui.query("body").style("background-color: white")
+    apply_theme()
+    return build_header()
 
 
 def upload_page(error: str = ""):
@@ -36,12 +39,11 @@ def upload_page(error: str = ""):
     Output: draws the page. Nothing is sent to any portal by uploading.
     """
     page_setup()
-    ui.label("Sysmon summary").classes("text-3xl font-bold")
     ui.label("Upload a Sysmon .evtx dump. It is read, filtered and ranked on "
              "this machine. No portal is called until you press "
              "\"Enrich next N\" or a Look up button on the report page.")
     if error in UPLOAD_ERRORS:
-        ui.label(UPLOAD_ERRORS[error]).classes("text-red-700 font-bold")
+        ui.label(UPLOAD_ERRORS[error]).classes("app-bad")
     ui.html(UPLOAD_FORM, sanitize=False)
 
 
@@ -53,17 +55,16 @@ def report_page(upload_id: str):
     restart) shows a message and a link to upload again. The process scores
     are worked out once here for the storylines and the timeline.
     """
-    page_setup()
+    theme = page_setup()
     state = UPLOADS.get(upload_id)
     if state is None:
         ui.label("That report does not exist (the server may have "
-                 "restarted).").classes("text-red-700 font-bold")
+                 "restarted).").classes("app-bad")
         ui.link("Upload again", "/")
         return
     view = {"state": state, "upload_id": upload_id,
             "process_scores": build_process_scores(state["events"]),
-            "seen": (state["version"], state["run"])}
-    ui.label("Sysmon summary").classes("text-3xl font-bold")
+            "seen": (state["version"], state["run"]), "theme": theme}
     ui.label("File: " + state["name"])
     with ui.tabs() as tabs:
         overview = ui.tab("Overview")

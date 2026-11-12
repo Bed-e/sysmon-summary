@@ -24,7 +24,8 @@ def draw_process_timeline(view, box, note, choice):
     table = view["stories"]["table"]
     rows = order_rows(table, slice_guids(view, choice))
     option = make_process_timeline(table, rows, view["spans"],
-                                   view["state"]["events"], view["process_scores"])
+                                   view["state"]["events"], view["process_scores"],
+                                   dark=view["theme"]["is_dark"])
     visible = max(min(len(rows), ROWS_VISIBLE), 3)
     box.clear()
     with box:
@@ -51,14 +52,17 @@ def build_timeline_tab(view):
              "and is coloured by its local score; dots are its events; dashed "
              "lines link a parent to each child it started. Hover for details, "
              "click a legend entry to hide a group, drag the sliders to zoom. "
-             "Times are UTC.").classes("text-sm text-gray-600")
+             "Times are UTC.").classes("app-muted")
     with ui.row().classes("items-center"):
         choice = ui.select(slice_choices(view["stories"]), value="flagged",
                            label="Show").classes("w-96")
-        note = ui.label().classes("text-sm text-gray-600")
+        note = ui.label().classes("app-muted")
     box = ui.column().classes("w-full")
     choice.on_value_change(lambda event: draw_process_timeline(view, box, note, event.value))
     draw_process_timeline(view, box, note, "flagged")
+    # Redraw in the new colours when the theme changes (keeps the dropdown choice).
+    view["theme"]["listeners"].append(
+        lambda: draw_process_timeline(view, box, note, choice.value))
 
     rows = make_suspicious_rows(events, view["process_scores"])
     ui.label("Flagged processes, in order of first appearance") \

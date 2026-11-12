@@ -29,7 +29,7 @@ def build_process_node(table, guid, depth=0):
             ui.label("user: " + entry["user"])
         if entry["parent_image"] and entry["parent_guid"] not in table:
             ui.label("parent: %s (orphan: parent started before the capture)"
-                     % entry["parent_image"]).classes("text-gray-600")
+                     % entry["parent_image"]).classes("app-muted")
         for label, items in (("IPs contacted", entry["ips"]),
                              ("DNS names queried", entry["dns"]),
                              ("files written", entry["files"]),
@@ -41,9 +41,9 @@ def build_process_node(table, guid, depth=0):
                 ioc["type"], ioc["value"], ioc["local_score"],
                 portal_text(ioc["portal"])))
             if ioc["local_reasons"]:
-                ui.label(short_why(ioc["local_reasons"])).classes("text-gray-600 text-sm")
+                ui.label(short_why(ioc["local_reasons"])).classes("app-muted")
         if depth >= MAX_DEPTH and entry["children"]:
-            ui.label("(deeper children not shown)").classes("text-gray-600")
+            ui.label("(deeper children not shown)").classes("app-muted")
         else:
             for child in entry["children"]:
                 build_process_node(table, child, depth + 1)
@@ -107,4 +107,4 @@ def build_storylines_tab(view):
         draw, lambda: len(view["stories"]["storylines"]))
     if view["stories"]["events_without_guid"]:
         ui.label("%d events had no process ID and are not in any storyline."
-                 % view["stories"]["events_without_guid"]).classes("text-gray-600")
+                 % view["stories"]["events_without_guid"]).classes("app-muted")

@@ -18,7 +18,7 @@ def build_overview_tab(view):
     Used by: report_page.
     """
     state = view["state"]
-    ui.label(NOT_A_VERDICT).classes("p-2 bg-yellow-100")
+    ui.label(NOT_A_VERDICT).classes("app-notice")
     view["counts"] = ui.table(columns=COUNT_COLUMNS, row_key="item",
                               rows=make_counts_rows(state, state["results"]))
     view["counts"].props("hide-header dense flat bordered")

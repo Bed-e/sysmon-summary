@@ -50,7 +50,8 @@ def main():
     """
     load_dotenv()
     ui.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")),
-           show=False, reload=False, title="Sysmon summary")
+           show=False, reload=False, title="Sysmon summary",
+           storage_secret="sysmon-summary-local-theme")
 
 
 if __name__ == "__main__":

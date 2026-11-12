@@ -414,3 +414,22 @@ def test_storyline_why_is_short():
         "ip 1.2.3.4: contacted by an unexpected program · a.exe sets an autorun registry key")
     assert reasons.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
         == "b.exe runs from a user folder"
+
+
+def test_timeline_dark_option_uses_light_text():
+    table = tl_table()
+    rows = timeline_data.order_rows(table, set(table))
+    light = timeline_chart.make_process_timeline(table, rows, {}, [], {})
+    dark = timeline_chart.make_process_timeline(table, rows, {}, [], {}, dark=True)
+    assert light["textStyle"]["color"] != dark["textStyle"]["color"]
+    assert dark["legend"]["textStyle"]["color"] == dark["textStyle"]["color"]
+    assert dark["yAxis"]["axisLabel"]["color"] == dark["textStyle"]["color"]
+
+
+def test_resolve_dark():
+    from web.theme import resolve_dark
+    assert resolve_dark("dark", False) is True
+    assert resolve_dark("light", True) is False
+    assert resolve_dark("system", True) is True
+    assert resolve_dark("system", False) is False
+    assert resolve_dark("junk", True) is True

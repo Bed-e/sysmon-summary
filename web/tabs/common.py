@@ -18,7 +18,7 @@ def build_show_more(draw, total_fn, step=SHOW_STEP):
     Used by: build_ioc_tab, build_storylines_tab and build_skipped_tab.
     """
     box = {"limit": step}
-    label = ui.label().classes("text-sm text-gray-600")
+    label = ui.label().classes("app-muted")
 
     def redraw():
         total = total_fn()
