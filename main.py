@@ -2,13 +2,15 @@
 
     python main.py my-training-example.evtx day-in-life-events.evtx
 
-M1: parse and collect only. No filtering, scoring or API calls yet.
+M1: parse and collect. M2: skip and rank locally. No API calls yet.
 """
 
 import argparse
 
+from filters import load_config, split_iocs
 from iocs import collect_iocs
 from parse import read_events
+from scoring import rank_iocs
 
 # Short names so the summary is easy to read.
 EVENT_NAMES = {
@@ -69,6 +71,28 @@ def build_summary(path, parsed, iocs):
     return "\n".join(lines)
 
 
+def build_ranking_summary(skipped, ranked, top):
+    """Return the skip counts and the top `top` ranked IOCs as one string."""
+    lines = []
+    lines.append("Skipped (not sent to any API):")
+    reasons = {}
+    for item in skipped:
+        reasons[item["reason"]] = reasons.get(item["reason"], 0) + 1
+    if not reasons:
+        lines.append("  none")
+    for reason in sorted(reasons):
+        lines.append("  %-24s %d" % (reason, reasons[reason]))
+
+    lines.append("")
+    lines.append("Ranked IOCs: %d (top %d shown). Scores order the lookups; "
+                 "they are not a verdict." % (len(ranked), min(top, len(ranked))))
+    for item in ranked[:top]:
+        lines.append("  %4d  %-5s %s" % (item["score"], item["type"], item["value"]))
+        for reason in item["reasons"]:
+            lines.append("          %s" % reason)
+    return "\n".join(lines)
+
+
 def get_arguments():
     """Read the command line. Returns an object with .paths (a list)."""
     parser = argparse.ArgumentParser(
@@ -80,16 +104,27 @@ def get_arguments():
         metavar="file.evtx",
         help="one or more Sysmon .evtx dump files",
     )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        help="how many ranked IOCs to show (default 10)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = get_arguments()
+    config = load_config()
 
     for path in args.paths:
         parsed = read_events(path)
         iocs = collect_iocs(parsed["events"])
+        to_rank, skipped = split_iocs(iocs, config)
+        ranked = rank_iocs(to_rank, parsed["events"], config)
         print(build_summary(path, parsed, iocs))
+        print()
+        print(build_ranking_summary(skipped, ranked, args.top))
         print()
 
 
