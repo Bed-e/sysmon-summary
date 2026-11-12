@@ -1,6 +1,6 @@
 # Sysmon Triage Tool: design
 
-Owner: Ben. This is the design before any code (milestone M0).
+Owner: Bed-e. This is the design before any code (milestone M0).
 
 ## 1. Purpose and scope
 
@@ -14,7 +14,7 @@ It is a **triage helper, not a verdict engine**. It never says "clean" or "safe"
 - A database, accounts or login
 - Uploading any file to any service. Only IOC values (an IP, a DNS name, a hash) leave the tool, and only to the three local APIs.
 - IPv6 (the IP API accepts IPv4 only)
-- Other IOC types (URLs, registry keys, mutexes)
+- Other IOC types as enrichment targets (URLs, registry keys, mutexes). No portal can look them up. Registry writes are still read and used as a local ranking signal (section 5).
 - Threads, async code and parallel API calls (see sections 2 and 10)
 
 ## 2. Ground rules for the code
@@ -22,18 +22,11 @@ It is a **triage helper, not a verdict engine**. It never says "clean" or "safe"
 These rules apply to every file and every milestone.
 
 1. **Function-based Python as much as possible.** Plain functions, dicts, lists, tuples, sets and strings. No classes unless the standard library forces one on us.
-2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it) and `python-evtx` (a binary `.evtx` file cannot be read without it). Flask is allowed from milestone M5 only. Anything else needs Ben's approval first.
-3. **Ask Ben before any decision that needs structures or patterns above beginner-intermediate level.** Examples: classes and dataclasses, `async`, threads and thread pools, decorators, generators beyond a simple loop, type-hint tricks, regex that is hard to read, and metaprogramming. Claude stops and asks. It does not decide on its own, even if the choice looks better.
+2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it) and `python-evtx` (a binary `.evtx` file cannot be read without it). Flask is allowed from milestone M5 only. Anything else needs Bed-e's approval first.
+3. **Ask Bed-e before any decision that needs structures or patterns above beginner-intermediate level.** Examples: classes and dataclasses, `async`, threads and thread pools, decorators, generators beyond a simple loop, type-hint tricks, regex that is hard to read, and metaprogramming. Claude stops and asks. It does not decide on its own, even if the choice looks better.
 4. If a function is hard to explain in a sentence or two, it is split or simplified.
 5. Data passed between steps is a plain dict or a list of dicts, so it can be printed and read.
 
-**Already approved by Ben**
-
-- `python-evtx` for reading `.evtx`, and the standard library's `xml.etree.ElementTree` for the event XML.
-- A plain `for` loop for API calls.
-- A static HTML file built by joining strings, with no template library.
-
-**Not approved yet (ask first):** threads, any cache of our own, anything not in the list above.
 
 ## 3. Design independence from sample data
 
@@ -48,7 +41,7 @@ Each step is one plain function or a small group of functions in one module. Eac
 
 ```
 .evtx file
-  1 parse        -> list of event dicts (only the event IDs we use)
+  1 parse        -> list of event dicts (Sysmon IDs 1, 3, 11, 12, 13, 14, 22; every other ID is counted and dropped)
   2 collect      -> unique IOCs, each with counts, first/last seen, hosts, ProcessGuids
   3 filter       -> split into "to rank" and "skipped (reason code)"
   4 score        -> a local risk number and reasons for each IOC that was not skipped
@@ -70,11 +63,10 @@ Each step is one plain function or a small group of functions in one module. Eac
 | IP | private, loopback, link-local, multicast, broadcast, CGNAT, reserved | `ip_not_public` |
 | IP | inside a published CDN or cloud range kept in a plain text list file | `ip_known_shared_range` |
 | DNS | ends in `.local`, `.lan`, `.internal`, `.home`, `.arpa`, is a single label, or is on our own AD domain list | `dns_internal` |
-| Hash | the file is in a protected system location (the Windows system directories and `Program Files`); the list of paths is kept in one configurable list | `hash_trusted_path` |
 
 `dns_internal` is a privacy rule, not only a speed rule. The DNS portal's design says names are sent to outside services and internal names must never be typed in. The IP portal likewise never sends private addresses out. This tool enforces both **before** any API call.
 
-A trusted path alone is weak, because a path can be faked. A skipped hash is still listed in the report, and a skipped item that also has a strong local risk signal (for example a trusted-looking path but an odd parent process) is **not** skipped.
+Hashes are never skipped. A trusted path (the Windows system directories and `Program Files`, kept in one configurable list) is weak evidence, because a path can be faked and a replaced system binary is a real attack. It is a small negative ranking signal instead (see below).
 
 ### Ranking signals (add points, each with a stated reason)
 
@@ -84,6 +76,13 @@ A trusted path alone is weak, because a path can be faked. A skipped hash is sti
 - Outbound connection from an unexpected process (not a browser or known updater), or an unusual port (anything other than 80, 443 or 53)
 - DNS name with a very long or high-entropy label, a burst of failed lookups (`QueryStatus` not 0) from one process, or a close lookalike of a name on a small well-known list
 - Regular timing between connections to the same destination (possible beaconing)
+- **Persistence by registry write** (events 12, 13, 14): a process writes an autorun location such as a `\CurrentVersion\Run` key. Points are added to the writing process (matched by `ProcessGuid`).
+- **Persistence reference to a file**: for each hash IOC, a registry write to an autorun location (the same test as the persistence-by-registry-write signal) whose `Details` or `TargetObject` contains the file's full path (lowercased, plain substring check). A path that appears in some other key, such as a Windows application inventory entry, does not count, and neither does a write made by the file's own process, which the process-level signal already covers. Points are added to that hash. This runs locally on every hash **before** any API call, so a new file with no reputation history still moves up the queue and the cap is more likely to reach it. After enrichment, the report shows the portal's verdict and the persistence hit together.
+- **Trusted path (negative)**: every file path seen for a hash is inside a protected system location. A small number of points is taken off. It lowers the order only; it never removes the hash from the queue and cannot cancel a strong signal.
+
+**Process-level signals** (odd parent pair, user-writable path, registry autorun write) are scored per `ProcessGuid`. Every IP, DNS name and hash that process touched inherits the full points, so a persistent or suspicious process pulls everything it did up the queue.
+
+Known limits of the path check: values using environment variables (`%APPDATA%`), quotes or arguments can be missed. A bare filename is never matched on its own, because common names would give false hits. A miss is "nothing pointed at it", never "no persistence".
 
 The weights are placeholders kept as named constants at the top of one file, so they can be tuned.
 
@@ -144,15 +143,15 @@ Small flat modules, each with plain functions:
 3. **Filter, then rank, instead of filter only.** Skipping removes only what cannot produce a useful answer. Ranking handles the rest, so a cap or a timeout still leaves the most suspicious IOCs checked first.
 4. **Skipped items are always visible with a reason.** Attackers abuse trusted binaries and domains, and the analyst must be able to audit the filter.
 5. **Local clues are part of the product.** The APIs score reputation only. They cannot see a double extension, a strange parent process or a lookalike domain.
-6. **A plain `for` loop for API calls, with a cap per run.** It is the easiest code to read. The filter makes the list short. Parallelism is added only if measured to be too slow, and only with Ben's approval.
+6. **A plain `for` loop for API calls, with a cap per run.** It is the easiest code to read. The filter makes the list short. Parallelism is added only if measured to be too slow, and only with Bed-e's approval.
 7. **Process-centric output.** An analyst reads a story, "this process started that one and talked to that address", not a flat list of 5,000 rows.
 8. **Private and internal values never leave the machine.** This follows the rules of the IP and DNS portals.
 9. **Tests make no network calls, and samples are fixtures only.** They run against the sample dumps and saved API answers, to check the code works. The samples never decide the design (section 3). Failures that cannot be recorded (a timeout, a `503`) are simulated, and the test says so.
 
-## 10. Open questions (ask Ben before deciding)
+## 10. Open questions (ask Bed-e before deciding)
 
 - Should the hash skip rule use signature data (Sysmon events 6 and 7) when a dump contains it? Dumps without it must still work, using path alone.
-- Is a sequential loop fast enough on real dumps? If not, threads need Ben's approval.
+- Is a sequential loop fast enough on real dumps? If not, threads need Bed-e's approval.
 - Does the tool need a cache of its own, or are the portals' caches enough?
 - What is the per-run API cap?
 - How are the local score and the API scores combined into one ranking?
@@ -163,8 +162,8 @@ Small flat modules, each with plain functions:
 Each is done when its stated result works on the sample dumps used as test fixtures (section 3).
 
 - **M0 Design.** This file is reviewed and agreed.
-- **M1 Parse and collect.** The tool reads both `.evtx` files and prints counts of events and unique IPs, DNS names and hashes. No API calls.
-- **M2 Filter and rank.** Each IOC has a skip reason or a local score with reasons, with tests for every rule.
+- **M1 Parse and collect.** The tool reads both `.evtx` files and prints counts of events (including registry events 12, 13, 14) and unique IPs, DNS names and hashes. Hashes come from event 1 only, one hash per file (sha256, then sha1, then md5). IPs come from event 3 only, not from DNS answers. Registry events are parsed and kept, not collected as IOCs. No API calls.
+- **M2 Filter and rank.** Each IOC has a skip reason or a local score with reasons, including the two persistence signals, with tests for every rule.
 - **M3 Enrich.** The tool queries the three portals one IOC at a time, highest score first, up to the cap, and shows failures as not enriched.
 - **M4 Storylines and static HTML.** One HTML report is written, with ranked process chains and the skipped-items table.
 - **M5 Flask web app.** A dump uploaded in the browser gives the same report.

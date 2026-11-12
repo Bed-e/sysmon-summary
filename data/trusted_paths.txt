@@ -1,0 +1,7 @@
+# Protected system locations, one per line (case-insensitive prefix match).
+# A hash whose files all run from here is skipped (reason: hash_trusted_path).
+C:\Windows\System32\
+C:\Windows\SysWOW64\
+C:\Windows\WinSxS\
+C:\Program Files\
+C:\Program Files (x86)\

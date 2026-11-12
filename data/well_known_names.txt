@@ -1,0 +1,9 @@
+# Well-known domains used for the lookalike check, one per line.
+google.com
+microsoft.com
+paypal.com
+apple.com
+amazon.com
+facebook.com
+office.com
+windowsupdate.com

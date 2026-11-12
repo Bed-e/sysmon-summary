@@ -1,0 +1,7 @@
+# CDN / cloud ranges (CIDR, one per line). IPs inside these are skipped
+# (reason: ip_known_shared_range). Seed list only: extend from the
+# providers' published range lists. Source and update process: design.md section 10.
+104.16.0.0/13
+172.64.0.0/13
+13.107.0.0/16
+151.101.0.0/16
