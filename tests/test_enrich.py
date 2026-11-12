@@ -6,7 +6,6 @@ import enrich
 from enrich import (
     build_request_url,
     enrich_one,
-    enrich_ranked,
     load_portal_urls,
     normalize_dns_answer,
     normalize_hash_answer,
@@ -128,16 +127,15 @@ def test_enrich_one_unconfigured_portal_makes_no_call(monkeypatch):
     assert calls == []
 
 
-def test_enrich_ranked_respects_cap_and_order(monkeypatch):
+def test_enrich_one_never_sends_a_not_enrichable_ioc(monkeypatch):
     calls = []
     fake_portal(monkeypatch, 200, {"verdict": {"score": 1, "level": "x"}}, calls=calls)
-    ranked = [item(value="1.1.1.%d" % n) for n in range(4)]
-    results = enrich_ranked(ranked, URLS, cap=2)
-    assert [r["value"] for r in results] == [r["value"] for r in ranked]
-    assert [r["status"] for r in results] == ["enriched", "enriched", "not_enriched", "not_enriched"]
-    assert "over the cap of 2" in results[2]["reasons"][0]
-    assert len(calls) == 2
-    assert calls[0].endswith("1.1.1.0")
+    blocked = item("dns", "dc1.corp.local")
+    blocked["not_enrichable"] = "dns_internal"
+    result = enrich_one(blocked, URLS)
+    assert result["status"] == "not_enriched"
+    assert result["reasons"] == ["not sent: dns_internal"]
+    assert calls == []
 
 
 def test_normalize_ip_not_applicable_is_not_enriched():

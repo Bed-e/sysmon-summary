@@ -98,8 +98,8 @@ def short_why(reasons):
     Output: one line, parts joined with " · ". Phrases about the same
     process are grouped ("a.exe runs from a user folder and sets an autorun
     registry key"); repeated phrases appear once.
-    Used by: make_ioc_rows, summarize_storyline, build_storyline,
-    build_process_node and make_suspicious_rows.
+    Used by: make_ioc_rows, summarize_storyline, build_process_node
+    and make_suspicious_rows.
     """
     order = []       # parts in first-seen order: ("process", name) or ("phrase", text)
     by_process = {}  # process name -> its phrases
@@ -120,31 +120,3 @@ def short_why(reasons):
         else:
             parts.append(text)
     return " · ".join(parts)
-
-
-def storyline_why(reasons):
-    """Make a storyline's "why it ranks here" reasons short.
-
-    Input: reasons from storylines.score_storyline. They look like
-    "ip 1.2.3.4: +20 connection from ..." or "process a.exe: +40 writes ...",
-    plus a closing "highest of N scored items in this tree" line.
-    Output: one line such as "ip 1.2.3.4: contacted by an unexpected program
-    · a.exe runs from a user folder". The "highest of" line is dropped (the
-    caption already gives the counts).
-    Used by: build_storyline.
-    """
-    subject = ""
-    cleaned = []
-    for reason in reasons:
-        if reason.startswith("highest of "):
-            continue
-        for kind in ("ip ", "dns ", "hash "):
-            if reason.startswith(kind) and ": " in reason:
-                head, reason = reason.split(": ", 1)
-                subject = subject or head
-                break
-        cleaned.append(reason)
-    text = short_why(cleaned)
-    if subject:
-        return "%s: %s" % (subject, text)
-    return text

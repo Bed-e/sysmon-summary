@@ -5,12 +5,12 @@ Pure data shaping with no chart or UI code, so it can be tested directly.
 
 import calendar
 
-from report import MAX_DEPTH
 from scoring.network import parse_time
 from scoring.paths import file_name
 from web.config import (DETAIL_LENGTH, EVENT_LANES, HIGH_SCORE, INDENT,
-                        STORYLINE_CHOICES)
+                        MAX_DEPTH, STORYLINE_CHOICES)
 from web.reasons import short_why
+from web.storyline_summary import chain_title
 
 
 def event_lane(event):
@@ -103,7 +103,7 @@ def process_spans(events):
 def flagged_slice(table, process_scores):
     """Pick the flagged processes and every process above them.
 
-    Input: table from storylines.build_storylines; process_scores from
+    Input: table from storylines.build_chains; process_scores from
     scoring.build_process_scores.
     Output: a set of guids: each process with a local score above 0, plus
     its parent, grandparent and so on (walking parent_guid while the parent
@@ -124,20 +124,20 @@ def flagged_slice(table, process_scores):
     return chosen
 
 
-def storyline_slice(stories, number):
-    """Return the set of guids in storyline `number` (1-based).
+def storyline_slice(chains, number):
+    """Return the set of guids in chain `number` (1-based).
 
-    Input: stories from storylines.build_storylines; number, a rank.
-    Output: the guids of that storyline's process tree.
+    Input: chains from storylines.build_chains; number, a rank.
+    Output: the guids of that chain's process tree.
     Used by: slice_guids.
     """
-    return set(stories["storylines"][number - 1]["guids"])
+    return set(chains["chains"][number - 1]["guids"])
 
 
 def order_rows(table, guids):
     """Put the chosen processes in tree order, one row each.
 
-    Input: table from storylines.build_storylines; guids, the chosen set.
+    Input: table from storylines.build_chains; guids, the chosen set.
     Output: a list of (guid, depth). A chosen process whose parent is not
     chosen is a root (depth 0). Roots, and the children under each process,
     are sorted by start time. A process is never listed twice.
@@ -210,20 +210,20 @@ def make_suspicious_rows(events, process_scores):
     return rows
 
 
-def slice_choices(stories):
+def slice_choices(chains):
     """Build the entries of the timeline's "Show" dropdown.
 
-    Input: stories from storylines.build_storylines.
+    Input: chains from storylines.build_chains.
     Output: {value: label}: "flagged" (the default), "story:1" ...
-    "story:20" for the top STORYLINE_CHOICES storylines, and "all".
+    "story:20" for the top STORYLINE_CHOICES chains (each named by its
+    strongest finding, as on its card), and "all".
     Used by: build_timeline_tab.
     """
     choices = {"flagged": "Flagged processes and their parents"}
-    table = stories["table"]
-    for number, storyline in enumerate(stories["storylines"][:STORYLINE_CHOICES], 1):
-        name = file_name(table[storyline["root"]]["image"]) or "unknown process"
-        choices["story:%d" % number] = "Storyline #%d: %s (%d processes)" % (
-            number, name, storyline["size"])
+    table = chains["table"]
+    for number, chain in enumerate(chains["chains"][:STORYLINE_CHOICES], 1):
+        choices["story:%d" % number] = "Chain #%d: %s (%d processes)" % (
+            number, chain_title(table, chain["title_finding"]), len(chain["guids"]))
     choices["all"] = "All processes (%d)" % len(table)
     return choices
 
@@ -231,15 +231,15 @@ def slice_choices(stories):
 def slice_guids(view, choice):
     """Turn a dropdown value into the set of processes to show.
 
-    Input: view (reads "stories" and "process_scores"); choice, a key of
+    Input: view (reads "chains" and "process_scores"); choice, a key of
     slice_choices. Anything unknown falls back to the flagged slice.
     Output: a set of guids. Used by: draw_process_timeline.
     """
-    stories = view["stories"]
+    chains = view["chains"]
     if choice == "all":
-        return set(stories["table"])
+        return set(chains["table"])
     if choice.startswith("story:"):
         number = choice[len("story:"):]
-        if number.isdigit() and 1 <= int(number) <= len(stories["storylines"]):
-            return storyline_slice(stories, int(number))
-    return flagged_slice(stories["table"], view["process_scores"])
+        if number.isdigit() and 1 <= int(number) <= len(chains["chains"]):
+            return storyline_slice(chains, int(number))
+    return flagged_slice(chains["table"], view["process_scores"])

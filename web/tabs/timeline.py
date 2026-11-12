@@ -21,7 +21,7 @@ def draw_process_timeline(view, box, note, choice):
     old size when only its height changes.
     Used by: build_timeline_tab (first draw and dropdown changes).
     """
-    table = view["stories"]["table"]
+    table = view["chains"]["table"]
     rows = order_rows(table, slice_guids(view, choice))
     option = make_process_timeline(table, rows, view["spans"],
                                    view["state"]["events"], view["process_scores"],
@@ -38,11 +38,11 @@ def build_timeline_tab(view):
     """Draw the Timeline tab: a per-process timeline, then a table of
     flagged processes in the order they first appeared.
 
-    Input: view; reads view["state"]["events"], view["stories"] (built by
+    Input: view; reads view["state"]["events"], view["chains"] (set by
     build_storylines_tab, which is drawn first) and view["process_scores"].
     Stores view["spans"].
     Output: draws a "Show" dropdown (flagged processes and their parents,
-    one storyline, or all), the chart and the table. Uses ui.echart, which
+    one chain, or all), the chart and the table. Uses ui.echart, which
     ships with NiceGUI (no new library). Used by: report_page.
     """
     events = view["state"]["events"]
@@ -56,7 +56,7 @@ def build_timeline_tab(view):
                  "click a legend entry to hide a group, drag the sliders to zoom. "
                  "Times are UTC.").classes("app-muted")
         with ui.row().classes("items-center"):
-            choice = ui.select(slice_choices(view["stories"]), value="flagged",
+            choice = ui.select(slice_choices(view["chains"]), value="flagged",
                                label="Show").classes("w-96 max-w-full")
             note = ui.label().classes("app-muted")
         box = ui.column().classes("w-full")

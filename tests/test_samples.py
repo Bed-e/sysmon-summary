@@ -7,9 +7,13 @@ import os
 
 import pytest
 
+from filters import list_iocs, load_config
 from iocs import HASH_LENGTHS, collect_iocs, normalize_dns, normalize_ip
-from main import build_summary, count_events
 from parse import WANTED_FIELDS, read_events
+from scoring.findings import find_findings
+from scoring.processes import build_process_scores
+from scoring.ranking import rank_iocs
+from storylines import build_chains, walk_tree
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLES = ["my-training-example.evtx", "day-in-life-events.evtx"]
@@ -49,6 +53,24 @@ def test_sample_iocs_are_well_formed(name):
         assert len(value) == HASH_LENGTHS[record["algorithm"]]
         assert record["first_seen"] <= record["last_seen"]
 
-    counts = count_events(parsed["events"])
-    assert sum(counts.values()) == len(parsed["events"])
-    assert "Unique IOCs" in build_summary(path, parsed, iocs)
+
+@pytest.mark.parametrize("name", SAMPLES)
+def test_sample_pipeline_puts_every_process_in_one_tree(name):
+    events = read_events(sample_path(name))["events"]
+    config = load_config()
+    iocs = collect_iocs(events)
+    scores = build_process_scores(events, find_findings(events, iocs, config))
+    result = build_chains(events, iocs, scores)
+    table = result["table"]
+
+    roots = [chain["root"] for chain in result["chains"]] + result["other"]
+    seen = []
+    for root in roots:
+        seen.extend(walk_tree(table, root))
+    assert sorted(seen) == sorted(table)  # each process in exactly one tree
+
+    for chain in result["chains"]:
+        assert chain["flagged"] and chain["title_finding"] is not None
+        assert chain["score"] == max(scores[guid]["score"] for guid in chain["flagged"])
+    ranked = rank_iocs(list_iocs(iocs, config), scores)
+    assert len(ranked) == len(iocs["ip"]) + len(iocs["dns"]) + len(iocs["hash"])

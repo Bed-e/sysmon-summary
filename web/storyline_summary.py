@@ -1,18 +1,64 @@
-"""The one-paragraph summary shown at the top of each storyline.
+"""Text for each chain card: its title, the one-line summary, and the IOC
+details (local score and portal answer) looked up when the card is drawn.
 """
 
 from scoring.paths import file_name
-from web.config import PORTAL_HIT_LABELS
-from web.reasons import portal_text, short_why
-from web.rows import count_text
+from web.config import NOT_ENRICHABLE_TEXT, PORTAL_HIT_LABELS
+from web.reasons import portal_text, short_reason, short_why
+from web.rows import answers_by_ioc, count_text
 
 
-def summarize_storyline(table, storyline, process_scores):
-    """Work out what is in one storyline.
+def chain_title(table, finding):
+    """Name a chain by what made it suspicious, not by its root process.
 
-    Input: table and storyline from storylines.build_storylines (with the
-    portal answers attached); process_scores from
-    scoring.build_process_scores.
+    Input: table from storylines.build_chains; finding, the chain's
+    "title_finding" (or None).
+    Output: text such as "leaked_video.mp4.exe — has a double extension"
+    or "powershell.exe → 1.2.3.4 — contacted by a program that rarely needs
+    the network". The process is the one the finding belongs to; the arrow
+    part appears only for an IP or DNS subject (a hash subject is the
+    process's own file, so its long value is left out).
+    Used by: build_storyline (the card header) and timeline_data.slice_choices.
+    """
+    if finding is None:
+        return "nothing flagged"
+    entry = table.get(finding["guid"])
+    name = file_name(entry["image"]) if entry else ""
+    name = name or "unknown process"
+    if finding["subject"] is not None and finding["subject"][0] != "hash":
+        name = "%s → %s" % (name, finding["subject"][1])
+    return "%s — %s" % (name, short_reason(finding["reason"]))
+
+
+def ioc_details(state):
+    """Gather what a chain card shows for each IOC.
+
+    Input: state, an UPLOADS entry (reads "ranked" and "results"; results
+    are copied first because the enrich thread may add to them).
+    Output: {(type, value): {"score", "reasons", "portal"}}. portal is the
+    portal's common-shape answer, the text "not requested", or the plain
+    not-enrichable reason (for example "not sent: internal name").
+    Used by: build_storylines_tab, worked out on every draw so new portal
+    answers appear without rebuilding the chains.
+    """
+    answers = answers_by_ioc(list(state["results"]))
+    details = {}
+    for item in state["ranked"]:
+        key = (item["type"], item["value"])
+        if item["not_enrichable"]:
+            portal = NOT_ENRICHABLE_TEXT.get(item["not_enrichable"], "not sent")
+        else:
+            portal = answers.get(key, "not requested")
+        details[key] = {"score": item["score"], "reasons": item["reasons"],
+                        "portal": portal}
+    return details
+
+
+def summarize_storyline(table, chain, process_scores, details):
+    """Work out what is in one chain.
+
+    Input: table and chain from storylines.build_chains; process_scores
+    from scoring.build_process_scores; details from ioc_details.
     Output: {"processes": n, "flagged": [{name, score, why}] highest first,
     "ips": n, "dns": n, "files": n, "registry": n,
     "portal_hits": [text], "first": time text, "last": time text}.
@@ -27,7 +73,7 @@ def summarize_storyline(table, storyline, process_scores):
     registry = 0
     hits = []
     times = []
-    for guid in storyline["guids"]:
+    for guid in chain["guids"]:
         entry = table[guid]
         if entry["time"]:
             times.append(entry["time"])
@@ -40,14 +86,14 @@ def summarize_storyline(table, storyline, process_scores):
         dns.update(entry["dns"])
         files += len(entry["files"])
         registry += len(entry["registry"])
-        for ioc in entry["iocs"]:
-            portal = ioc["portal"]
+        for key in entry["iocs"]:
+            portal = details.get(key, {}).get("portal")
             if isinstance(portal, dict) and portal["label"] in PORTAL_HIT_LABELS:
-                text = "%s %s: %s" % (ioc["type"], ioc["value"], portal_text(portal))
+                text = "%s %s: %s" % (key[0], key[1], portal_text(portal))
                 if text not in hits:
                     hits.append(text)
     flagged.sort(key=lambda f: -f["score"])
-    return {"processes": len(storyline["guids"]), "flagged": flagged,
+    return {"processes": len(chain["guids"]), "flagged": flagged,
             "ips": len(ips), "dns": len(dns), "files": files,
             "registry": registry, "portal_hits": hits,
             "first": min(times) if times else "",
@@ -55,7 +101,7 @@ def summarize_storyline(table, storyline, process_scores):
 
 
 def summary_caption(summary):
-    """Build the one-line summary shown under a collapsed storyline.
+    """Build the one-line summary shown under a collapsed chain.
 
     Input: summary from summarize_storyline.
     Output: text such as "9 processes · 2 flagged · 3 remote addresses ·

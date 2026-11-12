@@ -1,32 +1,34 @@
-"""Step 4 (M4): group events and IOCs by process into storylines.
+"""Step 5: build the attack chains from the process trees.
 
-A storyline is one process tree: a root process, everything it started, and
-what each of those processes did (network connections, DNS queries, files
-written, registry writes) plus the IOCs they touched.
+A process tree is a root process, everything it started, and what each of
+those processes did (network connections, DNS queries, files written,
+registry writes) plus the IOCs it touched. A chain is a tree with at least
+one flagged process (a process score above 0, from scoring/). Trees with
+nothing flagged are kept in "other" (design.md section 5).
 
 Flow:
-    events  (parse.read_events)           -> build_process_table
-                                          -> attach_activity
-                                          -> link_children
-    ranked  (scoring.rank_iocs)           -> attach_ioc_results
-    results (enrich.enrich_ranked)        -> attach_ioc_results
-    process_scores (scoring.build_process_scores) -> score_storyline
-    build_storylines runs all of the above and returns the sorted result,
-    which report.py (M4) and later web/app.py (M5) turn into a page.
+    events (parse.read_events)                    -> build_process_table
+                                                  -> attach_activity
+                                                  -> link_children
+    iocs (iocs.collect_iocs)                      -> attach_iocs
+    events                                        -> find_dropped_by
+    process_scores (scoring.build_process_scores) -> strongest_finding
+    build_chains runs all of the above once per upload and returns the
+    sorted result, which web/ reads.
 
-A storyline is ranked by the HIGHEST local score in its tree (not a sum).
-Portal scores are shown beside the local score and are never merged into
-it. (R2 turns storylines into chains, design.md section 5.)
+A chain is ranked by the HIGHEST process score in its tree (not a sum).
+Portal answers are never stored here: the page looks them up by
+(type, value) when it draws, so enrichment never rebuilds the chains.
 """
 
-NOT_REQUESTED = "not requested"
+from scoring.paths import lower_path
 
 
 def new_process(guid):
     """Return an empty process entry for `guid`.
 
     Input: guid, a Sysmon ProcessGuid string.
-    Output: a dict with every field the report reads, all empty.
+    Output: a dict with every field the chain cards read, all empty.
     Used by: build_process_table (event 1) and attach_activity (a process
     first seen in another event, which started before the capture began).
     """
@@ -45,6 +47,7 @@ def new_process(guid):
         "files": [],
         "registry": [],
         "iocs": [],
+        "dropped_by": None,
     }
 
 
@@ -53,7 +56,7 @@ def build_process_table(events):
 
     Input: events, the list of event dicts from parse.read_events.
     Output: {guid: process entry}. Identity fields come from event 1 only.
-    Used by: build_storylines, first step.
+    Used by: build_chains, first step.
     """
     table = {}
     for event in events:
@@ -83,7 +86,7 @@ def attach_activity(table, events):
     name, event 11 a file path, events 12/13/14 "event id + registry key".
     A process with no event 1 gets a stub entry (name from the event's
     Image), so its activity is not lost.
-    Used by: build_storylines, second step.
+    Used by: build_chains, second step.
     """
     skipped = 0
     for event in events:
@@ -129,7 +132,7 @@ def link_children(table):
     whose parent GUID is empty or not in the table (the parent started
     before the capture, so only its image name is known). Each parent's
     "children" list is filled, earliest start first.
-    Used by: build_storylines, third step.
+    Used by: build_chains, third step.
     """
     roots = []
     for guid, entry in table.items():
@@ -154,7 +157,7 @@ def walk_tree(table, root_guid):
     Input: table with children linked; root_guid, one root from link_children.
     Output: a list of GUIDs in depth-first order. A visited set makes a
     parent loop in bad data stop instead of running forever.
-    Used by: score_storyline and report.py.
+    Used by: build_chains.
     """
     order = []
     seen = set()
@@ -169,113 +172,137 @@ def walk_tree(table, root_guid):
     return order
 
 
-def attach_ioc_results(table, ranked, results):
-    """Put each IOC on every process that touched it.
 
-    Input: table; ranked from scoring.rank_iocs (each item has type, value,
-    score, reasons and record["process_guids"]); results from
-    enrich.enrich_ranked, or [] when enrichment was not run.
-    Output: the table, changed in place. Each process's "iocs" gets
-    {type, value, local_score, local_reasons, portal}, where portal is the
-    common-shape dict or the text "not requested". Processes with no entry
-    in the table are ignored.
-    Used by: build_storylines, fourth step.
+
+def attach_iocs(table, iocs):
+    """Note on each process which IOCs it touched.
+
+    Input: table from build_process_table; iocs from iocs.collect_iocs
+    ({"ip": {value: record}, "dns": ..., "hash": ...}, each record with
+    "process_guids").
+    Output: the table, changed in place. Each process's "iocs" list gets
+    (type, value) for every IOC whose record names that process. No scores
+    and no portal answers are stored. Processes not in the table are
+    ignored.
+    Used by: build_chains. "Enrich this chain" and the chain cards read
+    these lists.
     """
-    answers = {}
-    for result in results:
-        answers[(result["type"], result["value"])] = result
-
-    for item in ranked:
-        portal = answers.get((item["type"], item["value"]), NOT_REQUESTED)
-        for guid in item["record"]["process_guids"]:
-            entry = table.get(guid)
-            if entry is None:
-                continue
-            entry["iocs"].append({
-                "type": item["type"],
-                "value": item["value"],
-                "local_score": item["score"],
-                "local_reasons": item["reasons"],
-                "portal": portal,
-            })
+    for ioc_type in ("ip", "dns", "hash"):
+        for value, record in iocs[ioc_type].items():
+            for guid in record["process_guids"]:
+                entry = table.get(guid)
+                if entry is not None and (ioc_type, value) not in entry["iocs"]:
+                    entry["iocs"].append((ioc_type, value))
     return table
 
 
-def score_storyline(table, root_guid, process_scores):
-    """Score one storyline by its single highest local score.
+def find_dropped_by(table, events):
+    """Find which process wrote each process's program file.
 
-    Input: table (children linked, IOCs attached); root_guid; and
-    process_scores from scoring.build_process_scores.
-    Output: (score, reasons). The score is the highest local score of any
-    process or IOC in the tree. The reasons are that item's own reasons plus
-    one line counting the other scored items. Never a sum, never portal
-    scores. Used by: build_storylines.
+    Input: table from build_process_table; events from parse.read_events
+    (only event 11, file created, is used).
+    Output: the table, changed in place. When a process's image path
+    (lowercased) matches a file another process created, the earliest such
+    write is stored as entry["dropped_by"] = {"guid", "image", "time"}.
+    Otherwise "dropped_by" stays None. Trees are never merged.
+    Used by: build_chains. A chain card shows it as "file written by
+    chrome.exe at 10:02", which links a download to the program that ran.
     """
-    best_score = None
-    best_reasons = []
-    scored_items = 0
+    writes = {}
+    for event in events:
+        if event["event_id"] != 11:
+            continue
+        path = lower_path(event.get("TargetFilename", ""))
+        if path == "":
+            continue
+        writes.setdefault(path, []).append(event)
 
-    for guid in walk_tree(table, root_guid):
-        entry = table[guid]
+    for guid, entry in table.items():
+        best = None
+        for event in writes.get(lower_path(entry["image"]), []):
+            if event.get("ProcessGuid", "") in ("", guid):
+                continue
+            if best is None or event.get("time", "") < best.get("time", ""):
+                best = event
+        if best is not None:
+            writer = table.get(best["ProcessGuid"])
+            image = writer["image"] if writer else best.get("Image", "")
+            entry["dropped_by"] = {"guid": best["ProcessGuid"], "image": image,
+                                   "time": best.get("time", "")}
+    return table
+
+
+def strongest_finding(guids, process_scores):
+    """Pick the one finding that best explains why a tree is suspicious.
+
+    Input: guids, one tree in walk_tree order; process_scores from
+    scoring.build_process_scores.
+    Output: the finding dict with the most points among those processes
+    (the earliest in tree order on a tie), or None when none has a finding
+    with points above 0.
+    Used by: build_chains, for the chain's title ("what made it
+    suspicious", not the root process).
+    """
+    best = None
+    for guid in guids:
         process = process_scores.get(guid)
-        if process is not None:
-            scored_items += 1
-            if best_score is None or process["score"] > best_score:
-                who = entry["image"] or "unknown process"
-                best_score = process["score"]
-                best_reasons = ["process %s: %+d %s" % (who, f["points"], f["reason"])
-                                for f in process["findings"]]
-        for ioc in entry["iocs"]:
-            scored_items += 1
-            if best_score is None or ioc["local_score"] > best_score:
-                best_score = ioc["local_score"]
-                best_reasons = ["%s %s: %s" % (ioc["type"], ioc["value"], reason)
-                                for reason in ioc["local_reasons"]]
-
-    if best_score is None:
-        return 0, []
-    if scored_items > 1:
-        best_reasons = best_reasons + ["highest of %d scored items in this tree"
-                                       % scored_items]
-    return best_score, best_reasons
+        if process is None:
+            continue
+        for finding in process["findings"]:
+            if finding["points"] > 0 and (best is None or finding["points"] > best["points"]):
+                best = finding
+    return best
 
 
-def build_storylines(events, ranked, results, process_scores):
-    """Build the ranked storylines for one dump.
+def build_chains(events, iocs, process_scores):
+    """Build the attack chains for one dump (step 5 of the pipeline).
 
-    Input: events (parse.read_events), ranked (scoring.rank_iocs), results
-    (enrich.enrich_ranked, or [] with --no-enrich), process_scores
-    (scoring.build_process_scores, worked out once per dump).
-    Output: {"table": {guid: entry},
-             "storylines": [{"root": guid, "score": int, "reasons": [...],
-                             "size": processes in the tree,
-                             "guids": [guid, ...] in tree order}],
+    Input: events from parse.read_events; iocs from iocs.collect_iocs;
+    process_scores from scoring.build_process_scores.
+    Output: {"table": {guid: process entry},
+             "chains": [{"root": guid, "score": int, "title_finding": finding,
+                         "guids": [guid, ...] in tree order,
+                         "flagged": [guids with a score above 0]}],
+             "other": [root guids of trees with nothing flagged],
              "events_without_guid": int}
-    The storylines are sorted highest score first, then larger tree, then
-    earliest start. Used by: main.py now, web/app.py in M5; report.py
-    renders it.
+    Chains are sorted highest score first, then larger tree, then earliest
+    start. "other" keeps start order.
+    Used by: web.enrich_jobs.make_state, once per upload; the tabs and the
+    timeline read it from the state.
     """
     table = build_process_table(events)
-    skipped = attach_activity(table, events)
+    without_guid = attach_activity(table, events)
     roots = link_children(table)
-    attach_ioc_results(table, ranked, results)
+    attach_iocs(table, iocs)
+    find_dropped_by(table, events)
 
-    storylines = []
+    chains = []
+    other = []
     for root in roots:
         guids = walk_tree(table, root)
-        score, reasons = score_storyline(table, root, process_scores)
-        storylines.append({
+        flagged = []
+        score = 0
+        for guid in guids:
+            process = process_scores.get(guid)
+            if process is not None and process["score"] > 0:
+                flagged.append(guid)
+                score = max(score, process["score"])
+        if not flagged:
+            other.append(root)
+            continue
+        chains.append({
             "root": root,
             "score": score,
-            "reasons": reasons,
-            "size": len(guids),
+            "title_finding": strongest_finding(guids, process_scores),
             "guids": guids,
+            "flagged": flagged,
         })
 
-    storylines.sort(key=lambda s: (-s["score"], -s["size"],
-                                   table[s["root"]]["time"]))
+    chains.sort(key=lambda c: (-c["score"], -len(c["guids"]),
+                               table[c["root"]]["time"]))
     return {
         "table": table,
-        "storylines": storylines,
-        "events_without_guid": skipped,
+        "chains": chains,
+        "other": other,
+        "events_without_guid": without_guid,
     }

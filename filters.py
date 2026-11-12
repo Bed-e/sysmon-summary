@@ -1,16 +1,15 @@
-"""Step 3: skip IOCs that cannot produce a useful answer.
+"""Step 6 (enrichability): tag the IOCs that must not be sent to a portal.
 
-Skipping is not ranking (that is scoring/). A skipped IOC is never sent
-to an API, but it stays visible in the report with its reason code.
-Hashes are never skipped.
+Every IOC stays visible, ranked and in its chain. The tag only says why a
+lookup would not be made (design.md section 6):
+    ip_not_public, ip_known_shared_range   nothing to gain
+    dns_internal                           must not send (privacy)
+Hashes are always enrichable. enrich.enrich_one checks the tag again right
+before any call.
 
-Reason codes:
-    ip_not_public, ip_known_shared_range, dns_internal
-
-The result of split_iocs is a tuple (to_rank, skipped):
-    to_rank: [{"type": "ip", "value": "8.8.8.8", "record": {...}}, ...]
-    skipped: [{"type": "ip", "value": "10.0.0.5", "reason": "ip_not_public",
-               "record": {...}}, ...]
+The result of list_iocs is a flat list:
+    [{"type": "ip", "value": "10.0.0.5", "record": {...},
+      "not_enrichable": "ip_not_public"}, ...]
 """
 
 import ipaddress
@@ -107,8 +106,16 @@ def is_dns_internal(name, ad_domains):
     return False
 
 
-def skip_reason(ioc_type, value, config):
-    """Return the reason code for a skipped IOC, or None if it is kept."""
+def not_enrichable_reason(ioc_type, value, config):
+    """Say why one IOC must not be sent to a portal, if it must not.
+
+    Input: ioc_type ("ip", "dns" or "hash") and value, from iocs.collect_iocs;
+    config from load_config (ranges and ad_domains are used).
+    Output: "ip_not_public" or "ip_known_shared_range" (nothing to gain),
+    "dns_internal" (must not send), or "" when it can be enriched. Hashes
+    are always enrichable.
+    Used by: list_iocs.
+    """
     if ioc_type == "ip":
         if is_ip_not_public(value):
             return "ip_not_public"
@@ -117,22 +124,23 @@ def skip_reason(ioc_type, value, config):
     elif ioc_type == "dns":
         if is_dns_internal(value, config["ad_domains"]):
             return "dns_internal"
-    return None
+    return ""
 
 
-def split_iocs(iocs, config):
-    """Split collect_iocs output into (to_rank, skipped)."""
-    to_rank = []
-    skipped = []
+def list_iocs(iocs, config):
+    """Turn collect_iocs output into one flat list, each IOC tagged.
 
+    Input: iocs from iocs.collect_iocs; config from load_config.
+    Output: a list of {"type", "value", "record", "not_enrichable"}, every
+    IOC once (ips, then dns names, then hashes). not_enrichable is the
+    reason code from not_enrichable_reason, or "". Nothing is removed: an
+    IOC that cannot be enriched is still ranked and shown.
+    Used by: web.enrich_jobs.make_state, which hands it to
+    scoring.ranking.rank_iocs.
+    """
+    items = []
     for ioc_type in ["ip", "dns", "hash"]:
         for value, record in iocs[ioc_type].items():
-            item = {"type": ioc_type, "value": value, "record": record}
-            reason = skip_reason(ioc_type, value, config)
-            if reason is None:
-                to_rank.append(item)
-            else:
-                item["reason"] = reason
-                skipped.append(item)
-
-    return to_rank, skipped
+            items.append({"type": ioc_type, "value": value, "record": record,
+                          "not_enrichable": not_enrichable_reason(ioc_type, value, config)})
+    return items

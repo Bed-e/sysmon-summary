@@ -283,7 +283,7 @@ def find_findings(events, iocs, config):
     config from filters.load_config (its "well_known" list is used).
     Output: one list of findings from process_findings,
     enumeration_findings, network_findings, dns_findings and hash_findings.
-    Used by: web.enrich_jobs.make_state (and main.py until R4), which hand
+    Used by: web.enrich_jobs.make_state, which hands
     it to processes.build_process_scores.
     """
     findings = []

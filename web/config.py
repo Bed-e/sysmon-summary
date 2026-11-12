@@ -13,6 +13,15 @@ UPLOAD_DIR = "uploads"
 DEFAULT_LIMITS = {"hash_per_minute": 4, "hash_per_day": 500}
 N_CHOICES = ["5", "10", "25", "50", "100", "all"]
 REFRESH_SECONDS = 2
+MAX_DEPTH = 50  # deepest process nesting drawn; stops a malformed parent loop
+
+# Plain words for filters.not_enrichable_reason codes, shown instead of a
+# Look up button (design.md section 6).
+NOT_ENRICHABLE_TEXT = {
+    "ip_not_public": "not sent: private or reserved address",
+    "ip_known_shared_range": "not sent: shared CDN or cloud address",
+    "dns_internal": "not sent: internal name",
+}
 SHOW_STEP = 10  # rows (or storylines) shown at first, and added per "Show more"
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 EVTX_MAGIC = b"ElfFile\x00"
