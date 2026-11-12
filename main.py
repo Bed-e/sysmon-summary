@@ -4,10 +4,12 @@
 
 M1: parse and collect. M2: skip and rank locally. M3: ask the three local
 portals about the top-ranked IOCs (set IP_PORTAL_URL, HASH_PORTAL_URL and
-DNS_PORTAL_URL; use --no-enrich to skip).
+DNS_PORTAL_URL; use --no-enrich to skip). M4: --report writes one
+self-contained HTML report with ranked process storylines.
 """
 
 import argparse
+import os
 
 from dotenv import load_dotenv
 
@@ -15,7 +17,9 @@ from enrich import DEFAULT_CAP, enrich_ranked, load_portal_urls
 from filters import load_config, split_iocs
 from iocs import collect_iocs
 from parse import read_events
+from report import build_report, write_report
 from scoring import rank_iocs
+from storylines import build_storylines
 
 # Short names so the summary is easy to read.
 EVENT_NAMES = {
@@ -126,7 +130,32 @@ def get_arguments():
         action="store_true",
         help="skip the portal lookups (local ranking only)",
     )
+    parser.add_argument(
+        "--report",
+        nargs="?",
+        const="report.html",
+        default=None,
+        metavar="out.html",
+        help="also write an HTML report (default name report.html; with "
+             "several dumps the dump name is added to each file name)",
+    )
     return parser.parse_args()
+
+
+def report_path_for(out_path, dump_path, dump_count):
+    """Return where one dump's report is written.
+
+    Input: out_path, the --report value; dump_path, the .evtx being
+    processed; dump_count, how many dumps were given.
+    Output: out_path itself for one dump; otherwise "<out stem>-<dump
+    stem><out ext>" so reports do not overwrite each other.
+    Used by: main.
+    """
+    if dump_count == 1:
+        return out_path
+    out_stem, out_ext = os.path.splitext(out_path)
+    dump_stem = os.path.splitext(os.path.basename(dump_path))[0]
+    return "%s-%s%s" % (out_stem, dump_stem, out_ext)
 
 
 def build_enrichment_summary(results):
@@ -174,9 +203,17 @@ def main():
         print()
         print(build_ranking_summary(skipped, ranked, args.top))
         print()
+        results = []
         if not args.no_enrich:
             results = enrich_ranked(ranked, urls, args.cap)
             print(build_enrichment_summary(results))
+            print()
+        if args.report:
+            stories = build_storylines(parsed["events"], ranked, results)
+            page = build_report(path, iocs, skipped, ranked, results,
+                                args.cap, stories)
+            out = report_path_for(args.report, path, len(args.paths))
+            print("Report written: %s" % write_report(page, out))
             print()
 
 
