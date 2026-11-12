@@ -1,0 +1,7 @@
+# Hash lookup limits for the web app (M5). Only hash lookups reach
+# VirusTotal, so only they are counted. Format: name=value, one per line.
+# Defaults are the VirusTotal free public API; check them against your own
+# key (a premium key has higher limits). The monthly limit is not tracked.
+# Source and use: design.md sections 7 and 8.
+hash_per_minute=4
+hash_per_day=500
