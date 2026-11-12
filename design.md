@@ -22,7 +22,7 @@ It is a **triage helper, not a verdict engine**. It never says "clean" or "safe"
 These rules apply to every file and every milestone.
 
 1. **Function-based Python as much as possible.** Plain functions, dicts, lists, tuples, sets and strings. No classes unless the standard library forces one on us.
-2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it) and `python-evtx` (a binary `.evtx` file cannot be read without it). Flask is allowed from milestone M5 only. Anything else needs Bed-e's approval first.
+2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it), `python-dotenv` (reads the portal URLs from a gitignored `.env`, approved by Bed-e) and `python-evtx` (a binary `.evtx` file cannot be read without it). Flask is allowed from milestone M5 only. Anything else needs Bed-e's approval first.
 3. **Ask Bed-e before any decision that needs structures or patterns above beginner-intermediate level.** Examples: classes and dataclasses, `async`, threads and thread pools, decorators, generators beyond a simple loop, type-hint tricks, regex that is hard to read, and metaprogramming. Claude stops and asks. It does not decide on its own, even if the choice looks better.
 4. If a function is hard to explain in a sentence or two, it is split or simplified.
 5. Data passed between steps is a plain dict or a list of dicts, so it can be printed and read.
@@ -103,6 +103,136 @@ All three run locally and are read-only for us. The base URLs come from configur
 | Limits | AbuseIPDB free tier is 1,000 checks a day | VirusTotal free quota is small | RDAP about 10 requests per 10 seconds |
 
 None of the APIs has a batch endpoint, so the tool makes one call per IOC. Each portal caches its own results.
+
+### 6.1 Contract details
+
+These were read from the code and test fixtures of the three portals (`enrichment-portal-simple`, `hash-enrich-2`, `ioc-simple-dns`). All three are read-only `GET` calls that return JSON. `enrich.py` is the only file that knows them.
+
+| | IP portal | Hash portal | DNS portal |
+|---|---|---|---|
+| Project | `enrichment-portal-simple` (Flask) | `hash-enrich-2` (FastAPI) | `ioc-simple-dns` (Flask) |
+| Default port | 5001 | 8000 | 8010 |
+| Config variable (in the portal's own clients) | `BACKEND_URL` (frontend), `PORTAL_URL` (MCP server) | `PORTAL_URL` | `BACKEND_URL` (no default) |
+| Health check | none | `GET /api/v1/health` | `GET /api/v1/health` |
+| Input cleaning done by the portal | strips spaces; IPv4 only | lowercases the hash | trims, lowercases, drops one trailing dot, converts to punycode |
+| Sources it asks | Shodan InternetDB, RDAP, AbuseIPDB | VirusTotal, MalwareBazaar, ThreatFox | Google DNS, RDAP, crt.sh |
+| Response header extras | none found | none found | `X-Cache-Age-<source>: <seconds>` for each cached source |
+
+The variable names above are what the portals' own clients read. Two portals use the same name, so this tool needs its own three settings, one per portal (proposed names: `IP_PORTAL_URL`, `HASH_PORTAL_URL`, `DNS_PORTAL_URL`).
+
+#### IP portal: `GET /api/ip/<ip>`
+
+Success `200`:
+
+```json
+{
+  "ip": "8.8.8.8",
+  "classification": {"category": "global", "explanation": null, "ip": "8.8.8.8"},
+  "verdict": {"level": "no_known_bad", "score": 0, "reasons": [], "summary": "..."},
+  "sources": [
+    {"name": "internetdb", "display_name": "...", "status": "ok",
+     "summary": {}, "raw": {}, "error": null}
+  ]
+}
+```
+
+- `verdict.level`: `malicious` (score 60 or more), `suspicious` (20 or more), `no_known_bad` (below 20), `not_applicable`. `score` is a whole number 0 to 100.
+- `not_applicable` is returned for private or reserved addresses (`classification.category` is not `global`). Its `score` is `0` but means **not judged**, never safe. All three sources are `skipped`. Our `ip_not_public` skip rule means the tool should never see this, but the converter must still handle it.
+- `sources` is a **list**. `name` is one of `internetdb`, `rdap`, `abuseipdb`. `status` is one of `ok`, `no_data`, `error`, `skipped`, `not_configured` (no AbuseIPDB key).
+- A missing or empty source adds points to the score ("undocumented is suspicious"), so a low-information IP is not shown as clean.
+- Errors, always `{"error": "<code>", "message": "<text>"}`:
+
+| Status | `error` code | Meaning |
+|---|---|---|
+| `400` | `invalid_ip` | not an IP address (hostnames, CIDR, URLs, hashes) |
+| `400` | `unsupported_ip_version` | IPv6 |
+| `503` | `sources_unavailable` | every source that was tried failed |
+| `500` | `internal_error` | a bug in the portal |
+
+#### Hash portal: `GET /api/v1/hash/{hash}`
+
+Success `200` (always, for a valid hash):
+
+```json
+{
+  "hash": "add97f...",
+  "hash_type": "sha256",
+  "sources": {
+    "virustotal":    {"status": "ok", "data": {}, "error": null},
+    "malwarebazaar": {"status": "ok", "data": {}, "error": null},
+    "threatfox":     {"status": "ok", "data": {}, "error": null}
+  },
+  "verdict": {"score": 90, "label": "malicious", "reasons": [], "failed_sources": []}
+}
+```
+
+- `hash_type`: `md5`, `sha1` or `sha256`, decided by length (32, 40, 64). Characters must be hex.
+- `sources` is a **dict keyed by source name**. `status` is one of `ok`, `not_found`, `error`. On `error`, `error` is a plain **string**; otherwise `null`.
+- `verdict.label`: `malicious` (score 70 or more), `suspicious` (30 to 69), `safe` (below 30). `score` is the highest score among the sources that know the hash.
+- A hash nobody knows scores `50` (`suspicious`) with a reason saying so. It is never `safe`.
+- `safe` needs VirusTotal to report at least 30 engines with no detection. If any source failed, a score below 30 is raised to `50` and the label is not `safe`.
+- `verdict.failed_sources` lists the sources that returned `error`.
+- The portal waits at most 12 seconds for all sources together. A slower source is reported as `status: error`, `error: "Took longer than 12 seconds"`.
+- Errors: `400` with `{"error": "Expected 32, 40 or 64 hex characters"}` (a single string, no code field). There is no `503`.
+
+#### DNS portal: `GET /api/v1/domain/{name}`
+
+Success `200` (always, for a valid name, even when every source failed):
+
+```json
+{
+  "ioc": {"type": "domain", "input": "Example.com.", "value": "example.com"},
+  "sources": {
+    "dns":   {"status": "ok", "data": {}, "score": 10, "score_reason": "..."},
+    "rdap":  {"status": "ok", "data": {}, "score": 10, "score_reason": "..."},
+    "crtsh": {"status": "error", "data": null,
+              "error": {"code": "timeout", "message": "..."}, "score": null, "score_reason": "..."}
+  },
+  "assessment": {
+    "score_min": 0, "score_max": 100, "average": 10,
+    "sources_used": 2, "sources_total": 3,
+    "verdict": "definitely_safe", "verdict_label": "Definitely safe", "verdict_note": null
+  }
+}
+```
+
+- `ioc.value` is the cleaned name that was actually looked up. Use it, not `input`.
+- `sources` is a **dict** with keys `dns`, `rdap`, `crtsh`. `status` is one of `ok`, `not_found`, `error`. On `error`, `error` is an **object** `{code, message}` (codes seen include `timeout` and `upstream_error`). `score` is `null` for an errored source, and that source is left out of the average.
+- `assessment.average` is the rounded mean of the scores that exist, or `null` when no source answered.
+- `assessment.verdict` bands by `average`: `definitely_safe` (0 to 30), `likely_safe` (31 to 45), `undetermined` (46 to 55), `likely_malware` (56 to 70), `definitely_malware` (71 to 100). `not_graded` when `average` is `null`.
+- When fewer than all sources scored, a `definitely_*` verdict is lowered to the matching `likely_*`, and `verdict_note` says why. `verdict_note` is `null` otherwise.
+- Errors, always `{"error": "<text>", "input": "<what was sent>"}`:
+
+| Status | Meaning |
+|---|---|
+| `400` | `not a valid DNS name: ...` (an IP address, a URL, a port, spaces, a single label, bad characters, longer than 253 characters) |
+| `404` | `not found` (wrong path) |
+| `405` | `method not allowed` |
+| `500` | `internal error` |
+
+#### Differences the converter must absorb
+
+| Point | IP | Hash | DNS |
+|---|---|---|---|
+| `sources` type | list of dicts with `name` | dict | dict |
+| Source error shape | string | string | object `{code, message}` |
+| Where the overall score lives | `verdict.score` | `verdict.score` | `assessment.average` (can be `null`) |
+| Where the label lives | `verdict.level` | `verdict.label` | `assessment.verdict` |
+| Reasons | `verdict.reasons` (list of text) | `verdict.reasons` (list of text) | each source's `score_reason`, plus `assessment.verdict_note` |
+| "Total failure" signal | HTTP `503` | none: look for every source `error` | none: `not_graded` and `average: null` |
+| Unknown IOC | `no_known_bad` or `suspicious` with points for missing data | `suspicious`, score 50 | per-source `not_found` |
+| Failed-source list | in the `sources[].status` | `verdict.failed_sources` | `sources_used` below `sources_total` |
+| "Not judged" signal | `level: not_applicable` | none | `verdict: not_graded` |
+
+**Mapping to the common shape** (section 6, "Combining the answers"). This mapping and the timeouts below are proposals made while writing this section, not facts from the portals, and are for Bed-e to review. `status` is one of `enriched`, `partial`, `not_enriched`:
+
+- `status: not_enriched` when the call failed (timeout, connection refused, `5xx`), when the IP portal returns `503`, when the hash portal reports every source as `error`, or when the DNS portal returns `not_graded`. `reasons` holds the cause. `score_0_to_100` is `null`.
+- `status: partial` when a portal answered but some sources failed (`verdict.failed_sources` not empty, or `sources_used` below `sources_total`).
+- `status: enriched` otherwise.
+- `label` is copied as given: `verdict.level`, `verdict.label` or `assessment.verdict`.
+- A `400` from any portal is a bug in our filters, not an IOC result. The tool logs it and marks the IOC `not_enriched` with reason `portal_rejected_input`.
+
+**Timeouts the tool must use.** A request timeout per portal, set above the portal's own worst case: IP at least 30 seconds, hash at least 15 seconds, DNS at least 70 seconds (crt.sh alone can take about a minute). The values are named constants in `enrich.py`.
 
 **Combining the answers**
 

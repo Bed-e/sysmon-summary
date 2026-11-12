@@ -6,10 +6,11 @@ the only module that knows the three portal contracts (design.md section 6).
 Every answer, good or bad, becomes the same dict:
     {"type": "ip", "value": "8.8.8.8",
      "score_0_to_100": 12 or None, "label": "no_known_bad" or None,
-     "reasons": [...], "status": "ok" or "not_enriched",
+     "reasons": [...], "status": "enriched", "partial" or "not_enriched",
      "local_score": 45, "local_reasons": [...]}
 
-A lookup that failed, timed out or was never made is "not_enriched" with
+"partial" means the portal answered but some of its sources failed. A
+lookup that failed, timed out or was never made is "not_enriched" with
 the reason in "reasons". It is never shown as a low score. The scores are
 policy numbers, not probabilities, and are never averaged across types.
 Nothing here says "safe" or "clean".
@@ -128,73 +129,102 @@ def as_list(value):
     return []
 
 
+def status_for(failed):
+    """Return "partial" when any source failed, else "enriched".
+
+    Input: failed, a list of the names of sources that failed.
+    Used by: the three normalize_* functions.
+    """
+    if failed:
+        return "partial"
+    return "enriched"
+
+
+def failed_note(failed):
+    """Return the list of reasons that names failed sources (empty if none)."""
+    if failed:
+        return ["sources that failed: %s" % ", ".join(failed)]
+    return []
+
+
 def normalize_ip_answer(item, body):
     """Convert an IP portal 200 answer to the common shape.
 
-    Input: item (ranked dict) and body (parsed JSON, has verdict.score,
-    verdict.level, verdict.reasons). Output: common-shape dict. A missing
-    score means "not enriched".
+    Input: item (ranked dict) and body (verdict.level/score/reasons and
+    sources, a LIST of {name, status}). level "not_applicable" means the
+    portal did not judge the address (its score 0 is NOT "safe"), so it is
+    "not_enriched". Sources with status "error" make the result "partial".
+    Output: common-shape dict.
     """
     verdict = body.get("verdict") if isinstance(body.get("verdict"), dict) else {}
     score = verdict.get("score")
+    if verdict.get("level") == "not_applicable":
+        return not_enriched(item, "portal did not judge this address (not_applicable)")
     if score is None:
         return not_enriched(item, "portal gave no score")
-    return make_result(item, score, verdict.get("level"),
-                       as_list(verdict.get("reasons")), "ok")
+    failed = []
+    for source in as_list(body.get("sources")):
+        if isinstance(source, dict) and source.get("status") == "error":
+            failed.append(str(source.get("name", "source")))
+    reasons = list(as_list(verdict.get("reasons"))) + failed_note(failed)
+    return make_result(item, score, verdict.get("level"), reasons, status_for(failed))
 
 
 def normalize_hash_answer(item, body):
     """Convert a hash portal 200 answer to the common shape.
 
-    Input: item (ranked dict) and body (verdict.score, verdict.label,
-    verdict.reasons, verdict.failed_sources). Failed sources are added to
-    the reasons so the analyst sees how complete the answer was.
+    Input: item (ranked dict) and body (verdict.score/label/reasons/
+    failed_sources, and sources, a DICT of {status}). When every source has
+    status "error" the portal knows nothing, so the result is
+    "not_enriched". Some failed sources make it "partial".
     Output: common-shape dict.
     """
     verdict = body.get("verdict") if isinstance(body.get("verdict"), dict) else {}
+    sources = body.get("sources") if isinstance(body.get("sources"), dict) else {}
+    statuses = [s.get("status") for s in sources.values() if isinstance(s, dict)]
+    if statuses and all(status == "error" for status in statuses):
+        return not_enriched(item, "every hash source failed")
     score = verdict.get("score")
     if score is None:
         return not_enriched(item, "portal gave no score")
-    reasons = list(as_list(verdict.get("reasons")))
-    failed = as_list(verdict.get("failed_sources"))
-    if failed:
-        reasons.append("sources that failed: %s" % ", ".join(str(f) for f in failed))
-    return make_result(item, score, verdict.get("label"), reasons, "ok")
+    failed = [str(name) for name in as_list(verdict.get("failed_sources"))]
+    reasons = list(as_list(verdict.get("reasons"))) + failed_note(failed)
+    return make_result(item, score, verdict.get("label"), reasons, status_for(failed))
 
 
 def normalize_dns_answer(item, body):
     """Convert a DNS portal 200 answer to the common shape.
 
-    Input: item (ranked dict) and body (assessment.average,
-    assessment.verdict, assessment.verdict_note, and a "sources" collection
-    whose entries have status, score and score_reason). Sources with
-    status "error" are listed as failed; the rest give their score_reason.
-    Output: common-shape dict. A null average means "not enriched".
+    Input: item (ranked dict) and body (assessment.average/verdict/
+    verdict_note/sources_used/sources_total, and sources, a DICT whose
+    entries have status, score and score_reason). A null average
+    (verdict "not_graded") is "not_enriched". Sources with status "error"
+    are listed as failed and make the result "partial".
+    Output: common-shape dict.
     """
     assessment = body.get("assessment") if isinstance(body.get("assessment"), dict) else {}
     score = assessment.get("average")
     if score is None:
-        return not_enriched(item, assessment.get("verdict_note") or "portal gave no score")
+        return not_enriched(item, assessment.get("verdict_note") or "no DNS source answered (not_graded)")
 
     reasons = []
     if assessment.get("verdict_note"):
         reasons.append(assessment["verdict_note"])
-    sources = body.get("sources")
-    if isinstance(sources, dict):
-        sources = [dict(entry, name=name) for name, entry in sources.items()
-                   if isinstance(entry, dict)]
     failed = []
-    for source in as_list(sources):
+    sources = body.get("sources") if isinstance(body.get("sources"), dict) else {}
+    for name, source in sources.items():
         if not isinstance(source, dict):
             continue
-        name = source.get("name", "source")
         if source.get("status") == "error":
             failed.append(str(name))
         elif source.get("score_reason"):
             reasons.append("%s: %s" % (name, source["score_reason"]))
-    if failed:
-        reasons.append("sources that failed: %s" % ", ".join(failed))
-    return make_result(item, score, assessment.get("verdict"), reasons, "ok")
+    used = assessment.get("sources_used")
+    total = assessment.get("sources_total")
+    if not failed and isinstance(used, int) and isinstance(total, int) and used < total:
+        failed.append("%d of %d sources did not score" % (total - used, total))
+    reasons += failed_note(failed)
+    return make_result(item, score, assessment.get("verdict"), reasons, status_for(failed))
 
 
 NORMALIZERS = {
@@ -223,7 +253,7 @@ def enrich_one(item, urls):
     if status is None:
         return not_enriched(item, error)
     if status == 400:
-        return not_enriched(item, "portal rejected the input (400)")
+        return not_enriched(item, "portal_rejected_input (400)")
     if status == 503:
         return not_enriched(item, "portal: every source failed (503)")
     if status != 200:

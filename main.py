@@ -9,6 +9,8 @@ DNS_PORTAL_URL; use --no-enrich to skip).
 
 import argparse
 
+from dotenv import load_dotenv
+
 from enrich import DEFAULT_CAP, enrich_ranked, load_portal_urls
 from filters import load_config, split_iocs
 from iocs import collect_iocs
@@ -139,12 +141,13 @@ def build_enrichment_summary(results):
         lines.append("  nothing to look up")
     over_cap = 0
     for result in results:
-        if result["status"] != "ok" and result["reasons"][0].startswith("over the cap"):
+        if result["status"] == "not_enriched" and result["reasons"][0].startswith("over the cap"):
             over_cap += 1
-        elif result["status"] == "ok":
-            lines.append("  %-5s %s  local %d | portal %s (%s)" % (
+        elif result["status"] != "not_enriched":
+            note = " [partial: some sources failed]" if result["status"] == "partial" else ""
+            lines.append("  %-5s %s  local %d | portal %s (%s)%s" % (
                 result["type"], result["value"], result["local_score"],
-                result["score_0_to_100"], result["label"]))
+                result["score_0_to_100"], result["label"], note))
             for reason in result["reasons"]:
                 lines.append("          %s" % reason)
         else:
@@ -157,6 +160,7 @@ def build_enrichment_summary(results):
 
 
 def main():
+    load_dotenv()
     args = get_arguments()
     config = load_config()
     urls = load_portal_urls()
