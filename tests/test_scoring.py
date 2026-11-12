@@ -7,7 +7,7 @@ from parse import WANTED_FIELDS
 from scoring.config import (WEIGHT_BEACONING, WEIGHT_DOUBLE_EXTENSION,
     WEIGHT_ENUMERATION, WEIGHT_LOOKALIKE, WEIGHT_ODD_PARENT,
     WEIGHT_REGISTRY_AUTORUN, WEIGHT_REGISTRY_REFERENCE,
-    WEIGHT_UNEXPECTED_PROCESS, WEIGHT_UNUSUAL_PORT, WEIGHT_USER_WRITABLE_PATH)
+    WEIGHT_RARE_NETWORK_PROCESS, WEIGHT_UNUSUAL_PORT, WEIGHT_USER_WRITABLE_PATH)
 from scoring.domains import dns_signals, entropy, levenshtein
 from scoring.findings import (dns_findings, enumeration_findings,
     find_findings, hash_persistence_signal, make_finding, network_findings)
@@ -131,20 +131,26 @@ def test_failed_lookup_threshold():
 
 # ---- network_signals ----
 
-def test_unexpected_process_and_unusual_port():
-    event = make_event(3, Image="C:\\x\\tool.exe", Initiated="true",
+POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def test_rare_network_program_and_unusual_port():
+    event = make_event(3, Image=POWERSHELL, Initiated="true",
                        DestinationIp="8.8.8.8", DestinationPort="4444")
-    assert points(network_signals([event])) == [20, 10]
+    assert points(network_signals([event])) == [WEIGHT_RARE_NETWORK_PROCESS,
+                                                 WEIGHT_UNUSUAL_PORT]
 
 
-def test_browser_on_normal_port_fires_nothing():
-    event = make_event(3, Image="C:\\Program Files\\Google\\chrome.exe",
-                       Initiated="true", DestinationPort="443")
-    assert network_signals([event]) == []
+def test_normal_programs_on_normal_ports_fire_nothing():
+    for image in ["C:\\Program Files\\Google\\chrome.exe",
+                  "C:\\Users\\bob\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
+                  "C:\\Windows\\System32\\svchost.exe", "C:\\x\\tool.exe"]:
+        event = make_event(3, Image=image, Initiated="true", DestinationPort="443")
+        assert network_signals([event]) == [], image
 
 
 def test_inbound_connection_is_ignored_and_missing_fields_are_unknown():
-    inbound = make_event(3, Image="C:\\x\\tool.exe", Initiated="false", DestinationPort="4444")
+    inbound = make_event(3, Image=POWERSHELL, Initiated="false", DestinationPort="4444")
     unknown = make_event(3, Initiated="true")
     assert network_signals([inbound, unknown]) == []
 
@@ -277,14 +283,14 @@ def test_empty_query_status_is_not_a_failure():
 
 def test_network_findings_are_per_process_and_ip():
     events = [
-        make_event(3, ProcessGuid="{T}", Image="C:\\x\\tool.exe", Initiated="true",
+        make_event(3, ProcessGuid="{T}", Image=POWERSHELL, Initiated="true",
                    DestinationIp="8.8.8.8", DestinationPort="4444"),
         make_event(3, ProcessGuid="{C}", Image="C:\\Program Files\\chrome.exe",
                    Initiated="true", DestinationIp="8.8.8.8", DestinationPort="443"),
     ]
     found = network_findings(events)
     assert [(f["guid"], f["points"]) for f in found] == [
-        ("{T}", WEIGHT_UNEXPECTED_PROCESS), ("{T}", WEIGHT_UNUSUAL_PORT)]
+        ("{T}", WEIGHT_RARE_NETWORK_PROCESS), ("{T}", WEIGHT_UNUSUAL_PORT)]
     assert all(f["subject"] == ("ip", "8.8.8.8") for f in found)
 
 
@@ -399,16 +405,33 @@ def test_ioc_inherits_process_findings_of_the_strongest_process_only():
         make_event(1, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
                    ParentImage="C:\\Windows\\System32\\services.exe"),
         make_event(3, ProcessGuid="{BAD}", Image=TEMP_EXE, Initiated="true",
-                   DestinationIp="8.8.8.8", DestinationPort="443"),
+                   DestinationIp="8.8.8.8", DestinationPort="4444"),
         make_event(3, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
-                   Initiated="true", DestinationIp="8.8.8.8", DestinationPort="443"),
+                   Initiated="true", DestinationIp="8.8.8.8", DestinationPort="4444"),
     ]
     ranked = rank_iocs([item("ip", "8.8.8.8", ["{OK}", "{BAD}"])], scores_for(events))
-    # two connections from unexpected processes (two distinct reasons),
-    # plus {BAD}'s process findings once
-    assert ranked[0]["score"] == (2 * WEIGHT_UNEXPECTED_PROCESS
+    # the unusual-port reason is the same text from both processes, so it
+    # counts once; plus {BAD}'s process findings once ({OK} has none)
+    assert ranked[0]["score"] == (WEIGHT_UNUSUAL_PORT
                                   + WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT)
     assert any("process evil.exe:" in reason for reason in ranked[0]["reasons"])
+
+
+def test_process_score_counts_a_repeated_reason_once():
+    events = [make_event(3, ProcessGuid="{P}", Image=POWERSHELL, Initiated="true",
+                         DestinationIp="8.8.8.%d" % i, DestinationPort="443")
+              for i in range(1, 31)]
+    process = scores_for(events)["{P}"]
+    # 30 IPs, 30 findings kept for the IOC table, but scored once
+    assert len([f for f in process["findings"] if f["kind"] == "subject"]) == 30
+    assert process["score"] == WEIGHT_RARE_NETWORK_PROCESS
+
+
+def test_process_score_counts_different_reasons_separately():
+    events = [make_event(3, ProcessGuid="{P}", Image="C:\\Windows\\x.exe", Initiated="true",
+                         DestinationIp="8.8.8.%d" % i, DestinationPort=port)
+              for i, port in [(1, "4444"), (2, "8080"), (3, "4444")]]
+    assert scores_for(events)["{P}"]["score"] == 2 * WEIGHT_UNUSUAL_PORT
 
 
 def test_subject_finding_does_not_spread_to_other_iocs_of_the_same_process():

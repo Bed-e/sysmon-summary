@@ -45,8 +45,13 @@ def build_process_scores(events, findings):
     Every ProcessGuid seen in an event gets an entry, with score 0 and no
     findings when nothing pointed at it. A finding for a guid with no event
     of its own (a parent that started before the capture) still gets an
-    entry, with an empty image. The score is the sum of the findings'
-    points.
+    entry, with an empty image.
+    The score is the sum of the findings' points, but the same reason text
+    counts only once per process (the count-once cap). So powershell
+    reaching 30 addresses gets "connection from a program that rarely needs
+    the network" once, not 30 times; each IP still keeps its own finding
+    for the IOC table. Different ports or different lookalike targets have
+    different texts and each count.
     Used by: web.enrich_jobs.make_state, which keeps the result in the
     upload's state; the chains, the IOC rank and the timeline all read it.
     """
@@ -59,11 +64,15 @@ def build_process_scores(events, findings):
         if entry["image"] == "":
             entry["image"] = event.get("Image", "")
 
+    counted = set()
     for finding in findings:
         entry = table.setdefault(finding["guid"],
                                  {"image": "", "score": 0, "findings": []})
         entry["findings"].append(finding)
-        entry["score"] += finding["points"]
+        key = (finding["guid"], finding["reason"])
+        if key not in counted:
+            counted.add(key)
+            entry["score"] += finding["points"]
     return table
 
 

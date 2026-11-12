@@ -105,8 +105,8 @@ def network_findings(events):
 
     Input: events from parse.read_events (only event 3 is used).
     Output: a list of "subject" findings with subject ("ip", ip). For each
-    (process, IPv4) pair, network_signals checks for an unexpected process
-    or an unusual port, and beaconing_signal checks for regular timing.
+    (process, IPv4) pair, network_signals checks for a program that rarely
+    needs the network or an unusual port, and beaconing_signal checks for regular timing.
     Grouping by process as well as IP means each process that made the
     connection carries its own clue.
     Used by: find_findings.

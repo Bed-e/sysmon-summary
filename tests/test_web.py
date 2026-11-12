@@ -242,7 +242,7 @@ def test_short_reason_covers_every_scoring_phrase():
             "d.exe was started by a service from a user folder",
         r"+40 process e.exe: writes an autorun registry key (HKU\x\Run\y)": "e.exe sets an autorun registry key",
         "+15 process f.exe: 7 failed DNS lookups from one process": "f.exe made 7 failed DNS lookups",
-        "+20 connection from an unexpected process (%s)" % p: "contacted by an unexpected program",
+        "+20 connection from a program that rarely needs the network (%s)" % p: "contacted by a program that rarely needs the network",
         "+10 unusual destination port (8080)": "unusual port (8080)",
         "+25 regular timing: 6 connections about 60 s apart": "possible beaconing (6 connections about 60 s apart)",
         "+20 very long label (40 characters)": "very long DNS label",
@@ -267,11 +267,11 @@ def test_short_reason_covers_every_scoring_phrase():
         .startswith("burst of discovery commands")
     assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
     assert reasons.short_why([
-        "+20 connection from an unexpected process (x)",
+        "+20 connection from a program that rarely needs the network (x)",
         "+20 process a.exe: file runs from a user-writable path (x)",
         "+40 process a.exe: writes an autorun registry key (k)",
         "+20 process b.exe: file runs from a user-writable path (y)",
-    ]) == ("contacted by an unexpected program · a.exe runs from a user folder "
+    ]) == ("contacted by a program that rarely needs the network · a.exe runs from a user folder "
            "and sets an autorun registry key · b.exe runs from a user folder")
 
 
@@ -413,11 +413,11 @@ def test_event_detail_is_short():
 
 
 def test_storyline_why_is_short():
-    lines = ["ip 1.2.3.4: +20 connection from an unexpected process (x)",
+    lines = ["ip 1.2.3.4: +20 connection from a program that rarely needs the network (x)",
                "ip 1.2.3.4: +40 process a.exe: writes an autorun registry key (k)",
                "highest of 28 scored items in this tree"]
     assert reasons.storyline_why(lines) == (
-        "ip 1.2.3.4: contacted by an unexpected program · a.exe sets an autorun registry key")
+        "ip 1.2.3.4: contacted by a program that rarely needs the network · a.exe sets an autorun registry key")
     assert reasons.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
         == "b.exe runs from a user folder"
 

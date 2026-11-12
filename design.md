@@ -52,11 +52,11 @@ A **finding** is one local clue about one process:
 
 - **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, and the **enumeration burst**. There is no minus for running from a system folder: living-off-the-land binaries (`rundll32`, `powershell`) doing bad things must not be discounted.
 - **Subject findings** are about one IOC the process touched, worked out per process:
-  - IP: the connection comes from an unexpected process (not a browser or known updater), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing).
+  - IP: the connection comes from a program that rarely needs the network but that attackers use to download or call home (`powershell`, `cmd`, `mshta`, `rundll32`, `certutil`, `bitsadmin`, ...: `RARE_NETWORK_PROCESSES`), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing). *Previously* any program not on a short browser allowlist fired, which flagged OneDrive, Teams and svchost.
   - DNS: very long or high-entropy label, or a close lookalike of a well-known name.
   - Hash: an autorun registry value written by *another* process contains this file's full path (lowercased substring; a bare filename never matches).
 - **Enumeration burst:** `ENUM_MIN_COUNT` or more discovery commands (`whoami`, `ipconfig`, `net`/`net1`, `systeminfo`, `nltest`, `tasklist`, `netstat`, `quser`, `arp`, `route`, `hostname`, ...) started by the **same parent** within `ENUM_WINDOW_SECONDS`. The points go to the parent (the shell doing the recon).
-- **Process score** = the sum of its findings. It is worked out once, kept in the upload's state, and read by the chains, the IOC table and the timeline.
+- **Process score** = the sum of its findings, with each reason text counted once per process. A process reaching 30 addresses keeps 30 findings (one per IP, for the IOC table) but scores the clue once. It is worked out once, kept in the upload's state, and read by the chains, the IOC table and the timeline.
 
 Weights, thresholds and word lists are named constants in `scoring/config.py`. Known limit: paths with environment variables, quotes or arguments can be missed. A miss means "nothing pointed at it", never "no persistence".
 

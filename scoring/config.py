@@ -10,7 +10,7 @@ WEIGHT_DOUBLE_EXTENSION = 50  # disguise has no benign use: heaviest single sign
 WEIGHT_ODD_PARENT = 25
 WEIGHT_REGISTRY_AUTORUN = 40
 WEIGHT_FAILED_LOOKUPS = 15
-WEIGHT_UNEXPECTED_PROCESS = 20
+WEIGHT_RARE_NETWORK_PROCESS = 20
 WEIGHT_UNUSUAL_PORT = 10
 WEIGHT_BEACONING = 25
 WEIGHT_ODD_DNS_LABEL = 20
@@ -41,9 +41,14 @@ DECOY_EXTENSIONS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt",
                     "zip"]
 EXECUTABLE_EXTENSIONS = ["exe", "scr", "com", "bat", "cmd", "js", "vbs", "ps1"]
 
-# Names (without .exe) that make outbound connections as a normal job.
-KNOWN_NETWORK_PROCESSES = ["chrome", "msedge", "firefox", "iexplore", "brave",
-                           "opera", "googleupdate", "microsoftedgeupdate"]
+# Names (without .exe) of programs that rarely have a reason to reach the
+# internet, but that attackers use to download files or call home. An
+# outbound connection from one of them is a finding. Normal programs
+# (browsers, OneDrive, Teams, svchost) are not listed, so they never fire.
+RARE_NETWORK_PROCESSES = ["powershell", "pwsh", "cmd", "wscript", "cscript",
+                          "mshta", "rundll32", "regsvr32", "certutil",
+                          "bitsadmin", "msiexec", "installutil", "regasm",
+                          "regsvcs", "msbuild"]
 
 DOCUMENT_VIEWERS = ["winword", "excel", "powerpnt", "outlook", "acrord32",
                     "acrobat", "foxitreader"]
