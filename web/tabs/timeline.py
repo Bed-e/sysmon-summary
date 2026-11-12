@@ -39,7 +39,7 @@ def build_timeline_tab(view):
     flagged processes in the order they first appeared.
 
     Input: view; reads view["state"]["events"], view["chains"] (set by
-    build_storylines_tab, which is drawn first) and view["process_scores"].
+    build_chains_tab, which is drawn first) and view["process_scores"].
     Stores view["spans"].
     Output: draws a "Show" dropdown (flagged processes and their parents,
     one chain, or all), the chart and the table. Uses ui.echart, which

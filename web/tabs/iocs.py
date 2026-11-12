@@ -3,23 +3,9 @@
 
 from nicegui import ui
 
-from web.actions import lookup_one
 from web.config import IOC_GRID_COLUMNS, IOC_HEADERS
 from web.rows import make_ioc_rows
-from web.tabs.common import build_show_more, score_badge
-
-
-def lookup_handler(view, rank):
-    """Return a no-argument click handler that looks up one row.
-
-    Input: view; rank, the row's 1-based rank (a number the server made).
-    Output: a function for a button's on_click. A separate function is used
-    so each button keeps its own rank. Used by: build_ioc_rows.
-    """
-    def click():
-        lookup_one(view, rank)
-    return click
-
+from web.tabs.common import build_show_more, lookup_handler, score_badge
 
 def build_ioc_rows(container, view, limit):
     """Draw the first `limit` rows of the IOC table as a plain grid.

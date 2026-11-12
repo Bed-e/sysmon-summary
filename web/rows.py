@@ -23,20 +23,35 @@ def make_ioc_rows(ranked, results):
     rows = []
     for rank, item in enumerate(ranked, 1):
         portal = answers.get((item["type"], item["value"]), "not requested")
+        action = ioc_action(item, portal)
         if item["not_enrichable"]:
             portal = NOT_ENRICHABLE_TEXT.get(item["not_enrichable"], "not sent")
-            action = ""
-        elif not isinstance(portal, dict):
-            action = "Look up"
-        elif portal["status"] == "not_enriched":
-            action = "Retry"
-        else:
-            action = ""
         rows.append({"rank": rank, "type": item["type"], "value": item["value"],
                      "score": item["score"], "why": short_why(item["reasons"]),
                      "full_why": "\n".join(item["reasons"]),
                      "portal": portal_text(portal), "action": action})
     return rows
+
+
+def ioc_action(item, portal):
+    """Choose the button an IOC gets, the same on every tab.
+
+    Input: item, a ranked IOC dict (scoring.rank_iocs, with its
+    not_enrichable tag from filters); portal, its answer so far: a
+    common-shape dict from state["results"], or the text "not requested".
+    Output: "" when the IOC is never sent (not_enrichable) or already has a
+    good answer, "Retry" after a "not_enriched" answer, "Look up" when it
+    has not been asked about yet.
+    Used by: make_ioc_rows (IOCs tab) and storyline_summary.ioc_details
+    (chain cards), so both show the same button for the same IOC.
+    """
+    if item["not_enrichable"]:
+        return ""
+    if not isinstance(portal, dict):
+        return "Look up"
+    if portal["status"] == "not_enriched":
+        return "Retry"
+    return ""
 
 
 def answers_by_ioc(results):

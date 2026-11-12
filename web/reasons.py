@@ -16,7 +16,7 @@ def portal_text(portal):
     or "portal 80 (label)" with " [partial: some sources failed]" added when
     some sources failed. A failed lookup is never shown as a low score.
     Plain text only: NiceGUI escapes it when it is drawn.
-    Used by: make_ioc_rows and build_process_node.
+    Used by: make_ioc_rows and the Chains tab.
     """
     if not isinstance(portal, dict):
         return str(portal)
@@ -98,7 +98,7 @@ def short_why(reasons):
     Output: one line, parts joined with " · ". Phrases about the same
     process are grouped ("a.exe runs from a user folder and sets an autorun
     registry key"); repeated phrases appear once.
-    Used by: make_ioc_rows, summarize_storyline, build_process_node
+    Used by: make_ioc_rows, summarize_storyline
     and make_suspicious_rows.
     """
     order = []       # parts in first-seen order: ("process", name) or ("phrase", text)

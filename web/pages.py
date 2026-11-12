@@ -11,10 +11,10 @@ from web.config import REFRESH_SECONDS, UPLOAD_ERRORS, UPLOAD_FORM
 from web.enrich_jobs import progress_text, progress_value
 from web.runtime import UPLOADS
 from web.theme import apply_theme, build_header
+from web.tabs.chains import build_chains_tab
 from web.tabs.iocs import build_ioc_tab
 from web.tabs.overview import build_overview_tab
 from web.tabs.skipped import build_skipped_tab
-from web.tabs.storylines import build_storylines_tab
 from web.tabs.timeline import build_timeline_tab
 
 
@@ -86,7 +86,7 @@ def report_page(upload_id: str):
         with ui.tabs().classes("w-full") as tabs:
             overview = ui.tab("Overview")
             iocs = ui.tab("IOCs")
-            stories = ui.tab("Storylines")
+            chain_tab = ui.tab("Chains")
             timeline = ui.tab("Timeline")
             skipped = ui.tab("Skipped")
         with ui.tab_panels(tabs, value=overview).classes("w-full"):
@@ -94,8 +94,8 @@ def report_page(upload_id: str):
                 build_overview_tab(view)
             with ui.tab_panel(iocs).classes("p-0 gap-4"):
                 build_ioc_tab(view)
-            with ui.tab_panel(stories).classes("p-0 gap-4"):
-                build_storylines_tab(view)
+            with ui.tab_panel(chain_tab).classes("p-0 gap-4"):
+                build_chains_tab(view)
             with ui.tab_panel(timeline).classes("p-0 gap-4"):
                 build_timeline_tab(view)
             with ui.tab_panel(skipped).classes("p-0 gap-4"):

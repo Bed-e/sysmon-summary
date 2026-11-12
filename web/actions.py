@@ -74,7 +74,7 @@ def enrich_chain(view, number):
     browser sends).
     Output: nothing. The IOCs touched by that chain's flagged processes
     (chain_items) go to enqueue; an unknown number is ignored.
-    Used by: the Chains tab (R3 step 2).
+    Used by: build_chain_card (the Chains tab).
     """
     items = chain_items(view["state"], number)
     if items:
@@ -106,6 +106,6 @@ def refresh_view(view):
         view["redraw_ioc"]()
     if state["worker"] != "running":
         view["timer"].deactivate()
-        if view["story_version"] != state["version"]:
-            view["story_version"] = state["version"]
-            view["redraw_story"]()
+        if view["chains_version"] != state["version"]:
+            view["chains_version"] = state["version"]
+            view["redraw_chains"]()

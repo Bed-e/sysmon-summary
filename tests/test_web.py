@@ -512,6 +512,21 @@ def test_ioc_details_reads_answers_and_tags():
     assert details[("ip", "8.8.8.8")]["score"] == 30
     assert details[("dns", "x.local")]["portal"] == "not sent: internal name"
     assert details[("dns", "a.example")]["portal"] == "not requested"
+    assert [details[k]["rank"] for k in [("ip", "8.8.8.8"), ("dns", "x.local"),
+                                         ("dns", "a.example")]] == [1, 2, 3]
+    assert details[("ip", "8.8.8.8")]["action"] == ""
+    assert details[("dns", "x.local")]["action"] == ""
+    assert details[("dns", "a.example")]["action"] == "Look up"
+
+
+def test_ioc_action_same_rules_for_every_tab():
+    item = ioc("ip", "8.8.8.8")
+    assert rows.ioc_action(item, "not requested") == "Look up"
+    assert rows.ioc_action(item, enrich.not_enriched(item, "timed out")) == "Retry"
+    assert rows.ioc_action(item, {"status": "partial"}) == ""
+    assert rows.ioc_action(item, {"status": "enriched"}) == ""
+    assert rows.ioc_action(ioc("dns", "x.local", not_enrichable="dns_internal"),
+                           "not requested") == ""
 
 
 def test_timeline_dark_option_uses_light_text():
