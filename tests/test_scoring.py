@@ -1,30 +1,18 @@
-"""Tests for scoring.py. Events are hand-built dicts, so the rules are checked
+"""Tests for scoring/. Events are hand-built dicts, so the rules are checked
 against the Sysmon schema and not against any sample dump.
 """
 
 from parse import WANTED_FIELDS
-from scoring import (
-    WEIGHT_BEACONING,
-    WEIGHT_DOUBLE_EXTENSION,
-    WEIGHT_ODD_PARENT,
-    WEIGHT_REGISTRY_AUTORUN,
-    WEIGHT_TRUSTED_PATH,
-    WEIGHT_USER_WRITABLE_PATH,
-    beaconing_signal,
-    build_process_scores,
-    dns_signals,
-    entropy,
-    failed_lookup_signal,
-    hash_persistence_signal,
-    levenshtein,
-    network_signals,
-    parent_child_signal,
-    path_signals,
-    rank_iocs,
-    registry_persistence_signal,
-    score_ioc,
-    trusted_path_adjustment,
-)
+from scoring.config import (WEIGHT_BEACONING, WEIGHT_DOUBLE_EXTENSION,
+    WEIGHT_ODD_PARENT, WEIGHT_REGISTRY_AUTORUN, WEIGHT_TRUSTED_PATH,
+    WEIGHT_USER_WRITABLE_PATH)
+from scoring.domains import dns_signals, entropy, levenshtein
+from scoring.network import beaconing_signal, network_signals
+from scoring.paths import parent_child_signal, path_signals
+from scoring.processes import (build_process_scores, failed_lookup_signal,
+    registry_persistence_signal)
+from scoring.ranking import (hash_persistence_signal, rank_iocs, score_ioc,
+    trusted_path_adjustment)
 
 CONFIG = {
     "ranges": [],
@@ -307,7 +295,7 @@ def test_ioc_inherits_only_the_highest_scoring_process():
     item = {"type": "ip", "value": "8.8.8.8",
             "record": {"count": 2, "first_seen": "", "process_guids": ["{OK}", "{BAD}"]}}
     process_scores = build_process_scores(events)
-    from scoring import group_ip_events
+    from scoring.ranking import group_ip_events
     score, reasons = score_ioc(item, process_scores, group_ip_events(events), [], CONFIG)
     # network: unexpected process (+20); inherited from {BAD} only: 20 + 25
     assert score == 20 + WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT

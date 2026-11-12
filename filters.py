@@ -1,9 +1,9 @@
 """Step 3: skip IOCs that cannot produce a useful answer.
 
-Skipping is not ranking (that is scoring.py). A skipped IOC is never sent
+Skipping is not ranking (that is scoring/). A skipped IOC is never sent
 to an API, but it stays visible in the report with its reason code.
 Hashes are never skipped: a trusted path is only a weak ranking signal
-(see scoring.py).
+(see scoring/).
 
 Reason codes:
     ip_not_public, ip_known_shared_range, dns_internal
@@ -44,7 +44,7 @@ def load_config(data_dir="data"):
         {"ranges": [ip_network, ...], "ad_domains": [...],
          "trusted_paths": [lowercase paths], "well_known": [...]}
     A bad CIDR line is skipped, not fatal. trusted_paths and well_known are
-    used by scoring.py; they are loaded here so all lists load in one place.
+    used by scoring/; they are loaded here so all lists load in one place.
     """
     ranges = []
     for text in load_list(os.path.join(data_dir, "shared_ranges.txt")):

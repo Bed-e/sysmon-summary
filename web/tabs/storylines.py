@@ -4,7 +4,7 @@
 from nicegui import ui
 
 from report import MAX_DEPTH
-from scoring import file_name
+from scoring.paths import file_name
 from storylines import build_storylines
 from web.reasons import portal_text, short_why, storyline_why
 from web.storyline_summary import summarize_storyline, summary_caption

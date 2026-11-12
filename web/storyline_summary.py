@@ -1,7 +1,7 @@
 """The one-paragraph summary shown at the top of each storyline.
 """
 
-from scoring import file_name
+from scoring.paths import file_name
 from web.config import PORTAL_HIT_LABELS
 from web.reasons import portal_text, short_why
 from web.rows import count_text

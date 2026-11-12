@@ -236,7 +236,7 @@ def test_store_result_replaces_a_retry():
 
 
 def test_short_reason_covers_every_scoring_phrase():
-    import scoring
+    from scoring import domains, paths, processes, ranking
     p = r"C:\Users\bob\AppData\Local\Temp\a.pdf.exe"
     cases = {
         "+20 process a.exe: file runs from a user-writable path (%s)" % p: "a.exe runs from a user folder",
@@ -263,11 +263,11 @@ def test_short_reason_covers_every_scoring_phrase():
     for text, short in cases.items():
         assert reasons.short_reason(text) == short, text
     # The real scoring code still writes these phrases (guards against drift).
-    assert scoring.path_signals(p)[0][1].startswith("file runs from a user-writable path")
-    assert scoring.path_signals(p)[1][1].startswith("double extension")
-    assert scoring.failed_lookup_signal(9)[0][1].endswith("failed DNS lookups from one process")
-    assert scoring.dns_signals("x" * 40 + ".com", [])[0][1].startswith("very long label")
-    assert scoring.trusted_path_adjustment([r"c:\windows\a.exe"], [r"c:\windows"])[0][1] \
+    assert paths.path_signals(p)[0][1].startswith("file runs from a user-writable path")
+    assert paths.path_signals(p)[1][1].startswith("double extension")
+    assert processes.failed_lookup_signal(9)[0][1].endswith("failed DNS lookups from one process")
+    assert domains.dns_signals("x" * 40 + ".com", [])[0][1].startswith("very long label")
+    assert ranking.trusted_path_adjustment([r"c:\windows\a.exe"], [r"c:\windows"])[0][1] \
         .startswith("all copies run from protected system paths")
     assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
     assert reasons.short_why([

@@ -1,7 +1,7 @@
 """Timeline chart: builds the ECharts option dict for the process timeline.
 """
 
-from scoring import file_name
+from scoring.paths import file_name
 from web.config import EVENT_TYPE_COLORS, LABEL_WIDTH, ROWS_VISIBLE, SCORE_BARS
 from web.timeline_data import (event_detail, event_lane, row_label,
     score_level, time_in_ms)

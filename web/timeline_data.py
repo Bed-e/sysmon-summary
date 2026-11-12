@@ -6,7 +6,8 @@ Pure data shaping with no chart or UI code, so it can be tested directly.
 import calendar
 
 from report import MAX_DEPTH
-from scoring import file_name, parse_time
+from scoring.network import parse_time
+from scoring.paths import file_name
 from web.config import (DETAIL_LENGTH, EVENT_LANES, HIGH_SCORE, INDENT,
                         STORYLINE_CHOICES)
 from web.reasons import short_why

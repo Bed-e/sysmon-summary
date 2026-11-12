@@ -268,7 +268,7 @@ Small flat modules, each with plain functions:
 | `parse.py` | read the `.evtx`, return event dicts |
 | `iocs.py` | collect and de-duplicate IOCs |
 | `filters.py` | skip rules |
-| `scoring.py` | local ranking signals |
+| `scoring/` | local ranking signals |
 | `enrich.py` | call the three APIs, convert answers to the common shape |
 | `storylines.py` | build process chains from `ProcessGuid` |
 | `report.py` | write the HTML |

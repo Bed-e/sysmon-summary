@@ -6,7 +6,7 @@ tab's content comes from web/tabs/.
 
 from nicegui import ui
 
-from scoring import build_process_scores
+from scoring.processes import build_process_scores
 from web.actions import refresh_view
 from web.config import REFRESH_SECONDS, UPLOAD_ERRORS, UPLOAD_FORM
 from web.runtime import UPLOADS

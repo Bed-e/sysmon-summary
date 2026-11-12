@@ -18,7 +18,7 @@ from filters import load_config, split_iocs
 from iocs import collect_iocs
 from parse import read_events
 from report import build_report, write_report
-from scoring import rank_iocs
+from scoring.ranking import rank_iocs
 from storylines import build_storylines
 
 # Short names so the summary is easy to read.

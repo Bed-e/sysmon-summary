@@ -59,7 +59,7 @@ SUSPICIOUS_COLUMNS = [
      "style": "white-space: normal"},
 ]
 
-# Short phrases for the reasons scoring.py writes (see short_reason).
+# Short phrases for the reasons scoring/ writes (see short_reason).
 # (text the reason starts with, short phrase, keep the bracketed detail?)
 SHORT_REASONS = [
     ("file runs from a user-writable path", "runs from a user folder", False),

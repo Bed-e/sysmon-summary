@@ -1,6 +1,6 @@
 """Readable text for IOC reasons and portal answers.
 
-scoring.py writes long reason sentences; these functions shorten them for the
+scoring/ writes long reason sentences; these functions shorten them for the
 IOC table and the storyline summaries, and turn a portal result into words.
 """
 
@@ -42,7 +42,7 @@ def bracket_detail(text):
 def reason_parts(text):
     """Split one scoring reason into (process name, short phrase).
 
-    Input: text, one reason made by scoring.py, for example
+    Input: text, one reason made by scoring/, for example
     "+20 process onedrivesetup.exe: file runs from a user-writable path
     (C:\\Users\\...)", or a process signal without the points and prefix.
     Output: ("onedrivesetup.exe", "runs from a user folder"); the name is ""

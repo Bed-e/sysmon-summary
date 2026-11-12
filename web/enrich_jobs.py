@@ -11,7 +11,7 @@ import time
 from enrich import enrich_one, not_enriched
 from filters import load_config, split_iocs
 from iocs import collect_iocs
-from scoring import rank_iocs
+from scoring.ranking import rank_iocs
 from web.config import BUDGET_REASON, USAGE_PATH
 from web.limits import add_daily_count, read_daily_count, seconds_to_wait
 from web.runtime import LAST_HASH, START_LOCK
