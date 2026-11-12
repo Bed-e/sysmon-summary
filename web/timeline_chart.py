@@ -7,7 +7,7 @@ from web.timeline_data import (event_detail, event_lane, row_label,
     score_level, time_in_ms)
 
 
-def make_process_timeline(table, rows, spans, events, process_scores):
+def make_process_timeline(table, rows, spans, events, process_scores, dark=False):
     """Build the ECharts settings for the per-process timeline.
 
     Input: table; rows from order_rows; spans from process_spans; events
@@ -26,8 +26,15 @@ def make_process_timeline(table, rows, spans, events, process_scores):
     - process names left-aligned in a LABEL_WIDTH column so the tree
       indentation shows (long names are cut with "...").
     Rows are placed by number, so two processes with the same name stay
-    apart. Used by: draw_process_timeline.
+    apart.
+    dark: True on a dark page; the text, axis lines, tooltip and the
+    parent-to-child lines then use light colours (ECharts ignores CSS, so the
+    colours are set here). Default False keeps the light-page output.
+    Used by: draw_process_timeline.
     """
+    text = "#d4d9e3" if dark else "#333333"
+    line = "#4a5568" if dark else "#cccccc"
+    link = "#a0aec0" if dark else "#555555"
     index = {}
     labels = []
     for position, (guid, depth) in enumerate(rows):
@@ -80,13 +87,14 @@ def make_process_timeline(table, rows, spans, events, process_scores):
                        "data": bars[level]})
     series.append({"name": "Parent → child", "type": "lines",
                    "coordinateSystem": "cartesian2d", "z": 2,
-                   "lineStyle": {"color": "#555555", "width": 1.5, "type": "dashed"},
+                   "lineStyle": {"color": link, "width": 1.5, "type": "dashed"},
                    "data": links})
     for lane, color in EVENT_TYPE_COLORS:
         series.append({"name": lane, "type": "scatter", "symbolSize": 7, "z": 3,
                        "itemStyle": {"color": color}, "data": dots[lane]})
 
-    zoom = [{"type": "slider", "xAxisIndex": 0, "bottom": 10},
+    zoom = [{"type": "slider", "xAxisIndex": 0, "bottom": 10,
+             "textStyle": {"color": text}, "borderColor": line},
             {"type": "inside", "xAxisIndex": 0}]
     if len(rows) > ROWS_VISIBLE:
         zoom.append({"type": "slider", "yAxisIndex": 0, "right": 5, "width": 14,
@@ -94,14 +102,19 @@ def make_process_timeline(table, rows, spans, events, process_scores):
     return {
         "useUTC": True,
         "animation": False,
+        "backgroundColor": "transparent",
+        "textStyle": {"color": text},
         "tooltip": {"trigger": "item", "formatter": "{b}"},
-        "legend": {"top": 0, "type": "scroll"},
+        "legend": {"top": 0, "type": "scroll", "textStyle": {"color": text}},
         "grid": {"left": LABEL_WIDTH, "right": 40, "top": 40, "bottom": 60},
-        "xAxis": {"type": "time"},
+        "xAxis": {"type": "time", "axisLabel": {"color": text},
+                  "axisLine": {"lineStyle": {"color": line}},
+                  "splitLine": {"lineStyle": {"color": line}}},
         "yAxis": {"type": "category", "data": labels, "inverse": True,
+                  "axisLine": {"lineStyle": {"color": line}},
                   "axisLabel": {"interval": 0, "fontSize": 11, "align": "left",
                                 "margin": LABEL_WIDTH - 10, "width": LABEL_WIDTH - 20,
-                                "overflow": "truncate"}},
+                                "overflow": "truncate", "color": text}},
         "dataZoom": zoom,
         "series": series,
     }

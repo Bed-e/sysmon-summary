@@ -61,7 +61,7 @@ def build_ioc_tab(view):
     """
     state = view["state"]
     ui.label("Hover over a \"why\" to see the full reasons.") \
-        .classes("text-sm text-gray-600")
+        .classes("app-muted")
     container = ui.column().classes("w-full")
 
     def draw(limit):
