@@ -103,9 +103,9 @@ def refresh_view(view):
     """Update the page from the shared state. The timer calls this.
 
     Input: view (state and the live parts stored by the build_* functions).
-    Output: nothing. Updates the status line, the counts and the Enrich
-    button every tick, and redraws the IOC rows only when an answer arrived
-    (state["version"] changed) or the run state changed. When the run is no
+    Output: nothing. Updates the status line, the count tiles (through
+    view["draw_counts"]) and the Enrich button every tick, and redraws the
+    IOC rows only when an answer arrived (state["version"] changed) or the run state changed. When the run is no
     longer "running" it stops the timer and, if the answers changed, rebuilds
     the storylines once so the portal answers appear inside them.
     Used by: report_page (timer) and begin_enrichment.
@@ -114,8 +114,7 @@ def refresh_view(view):
     results = list(state["results"])
     view["status"].text = status_text(state)
     view["button"].set_enabled(state["run"] != "running")
-    view["counts"].rows[:] = make_counts_rows(state, results)
-    view["counts"].update()
+    view["draw_counts"](make_counts_rows(state, results))
     seen = (state["version"], state["run"])
     if view.get("seen") != seen:
         view["seen"] = seen

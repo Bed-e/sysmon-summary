@@ -49,11 +49,6 @@ SKIPPED_COLUMNS = [
      "style": "white-space: normal; word-break: break-all"},
     {"name": "count", "label": "Sightings", "field": "count", "align": "left"},
 ]
-COUNT_COLUMNS = [
-    {"name": "item", "label": "Item", "field": "item", "align": "left"},
-    {"name": "value", "label": "Value", "field": "value", "align": "left"},
-]
-
 SUSPICIOUS_COLUMNS = [
     {"name": "time", "label": "First seen (UTC)", "field": "time", "align": "left"},
     {"name": "process", "label": "Process", "field": "process", "align": "left"},
