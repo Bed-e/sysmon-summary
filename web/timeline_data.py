@@ -7,7 +7,8 @@ import calendar
 
 from report import MAX_DEPTH
 from scoring import file_name, parse_time
-from web.config import DETAIL_LENGTH, EVENT_LANES, HIGH_SCORE, INDENT
+from web.config import (DETAIL_LENGTH, EVENT_LANES, HIGH_SCORE, INDENT,
+                        STORYLINE_CHOICES)
 from web.reasons import short_why
 
 
@@ -206,3 +207,38 @@ def make_suspicious_rows(events, process_scores):
                      "guid": guid})
     rows.sort(key=lambda r: r["time"])
     return rows
+
+
+def slice_choices(stories):
+    """Build the entries of the timeline's "Show" dropdown.
+
+    Input: stories from storylines.build_storylines.
+    Output: {value: label}: "flagged" (the default), "story:1" ...
+    "story:20" for the top STORYLINE_CHOICES storylines, and "all".
+    Used by: build_timeline_tab.
+    """
+    choices = {"flagged": "Flagged processes and their parents"}
+    table = stories["table"]
+    for number, storyline in enumerate(stories["storylines"][:STORYLINE_CHOICES], 1):
+        name = file_name(table[storyline["root"]]["image"]) or "unknown process"
+        choices["story:%d" % number] = "Storyline #%d: %s (%d processes)" % (
+            number, name, storyline["size"])
+    choices["all"] = "All processes (%d)" % len(table)
+    return choices
+
+
+def slice_guids(view, choice):
+    """Turn a dropdown value into the set of processes to show.
+
+    Input: view (reads "stories" and "process_scores"); choice, a key of
+    slice_choices. Anything unknown falls back to the flagged slice.
+    Output: a set of guids. Used by: draw_process_timeline.
+    """
+    stories = view["stories"]
+    if choice == "all":
+        return set(stories["table"])
+    if choice.startswith("story:"):
+        number = choice[len("story:"):]
+        if number.isdigit() and 1 <= int(number) <= len(stories["storylines"]):
+            return storyline_slice(stories, int(number))
+    return flagged_slice(stories["table"], view["process_scores"])

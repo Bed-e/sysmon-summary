@@ -1,4 +1,4 @@
-"""Tests for the web package (app.py and the modules split out of it).
+"""Tests for the web package (the non-UI modules and the upload endpoint).
 
 No network: call_portal is faked, uploads are tiny.
 """
@@ -9,9 +9,8 @@ import threading
 from starlette.datastructures import UploadFile
 
 import enrich
-from web import app as web
 from web import (config, enrich_jobs, limits, reasons, rows, runtime,
-                 storyline_summary, timeline_chart, timeline_data)
+                 storyline_summary, timeline_chart, timeline_data, upload)
 
 
 def ioc(kind, value, score=10):
@@ -189,23 +188,23 @@ def test_choose_n():
 
 def post(name, data):
     """Call the upload endpoint directly with a fake uploaded file."""
-    return web.upload_endpoint(UploadFile(io.BytesIO(data), filename=name))
+    return upload.upload_endpoint(UploadFile(io.BytesIO(data), filename=name))
 
 
 def test_upload_endpoint_rejects_bad_input_with_fixed_codes(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "UPLOAD_DIR", str(tmp_path))
-    assert web.upload_endpoint(None).headers["location"] == "/?error=none"
+    monkeypatch.setattr(upload, "UPLOAD_DIR", str(tmp_path))
+    assert upload.upload_endpoint(None).headers["location"] == "/?error=none"
     assert post("a.txt", b"hi").headers["location"] == "/?error=type"
     assert post("a.evtx", b"not evtx").headers["location"] == "/?error=magic"
-    monkeypatch.setattr(web, "MAX_UPLOAD_BYTES", 4)
+    monkeypatch.setattr(upload, "MAX_UPLOAD_BYTES", 4)
     assert post("a.evtx", b"ElfFile\x00xxxx").headers["location"] == "/?error=size"
     assert list(tmp_path.iterdir()) == []  # temp files always removed
 
 
 def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatch, tmp_path):
-    monkeypatch.setattr(web, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(upload, "UPLOAD_DIR", str(tmp_path))
     parsed = {"events": [], "dropped_counts": {}, "error_count": 0, "total": 0}
-    monkeypatch.setattr(web, "read_events", lambda path: parsed)
+    monkeypatch.setattr(upload, "read_events", lambda path: parsed)
     def no_network(url, timeout):
         raise AssertionError("upload must not call a portal")
     monkeypatch.setattr(enrich, "call_portal", no_network)
@@ -398,14 +397,14 @@ def test_slice_choices_and_guids():
     stories = {"table": table,
                "storylines": [{"root": "P", "size": 2, "guids": ["P", "C"]},
                               {"root": "Q", "size": 1, "guids": ["Q"]}]}
-    choices = web.slice_choices(stories)
+    choices = timeline_data.slice_choices(stories)
     assert list(choices) == ["flagged", "story:1", "story:2", "all"]
     assert choices["story:1"] == "Storyline #1: parent.exe (2 processes)"
     view = {"stories": stories, "process_scores": TL_SCORES}
-    assert web.slice_guids(view, "story:2") == {"Q"}
-    assert web.slice_guids(view, "all") == set(table)
-    assert web.slice_guids(view, "story:99") == {"C", "P"}  # unknown -> flagged
-    assert web.slice_guids(view, "nonsense") == {"C", "P"}
+    assert timeline_data.slice_guids(view, "story:2") == {"Q"}
+    assert timeline_data.slice_guids(view, "all") == set(table)
+    assert timeline_data.slice_guids(view, "story:99") == {"C", "P"}  # unknown -> flagged
+    assert timeline_data.slice_guids(view, "nonsense") == {"C", "P"}
 
 
 def test_event_detail_is_short():
