@@ -618,6 +618,18 @@ def test_timeline_dark_option_uses_light_text():
     assert "type" not in option["legend"]  # wraps instead of scrolling
 
 
+def test_timeline_narrows_name_column_on_small_charts():
+    table = tl_table()
+    option = timeline_chart.make_process_timeline(
+        table, timeline_data.order_rows(table, set(table)), {}, [], {})
+    assert option["grid"]["left"] == config.LABEL_WIDTH
+    [rule] = option["media"]
+    assert rule["query"] == {"maxWidth": config.NARROW_CHART}
+    assert rule["option"]["grid"]["left"] == config.NARROW_LABEL_WIDTH
+    assert rule["option"]["grid"]["top"] == config.NARROW_GRID_TOP
+    assert rule["option"]["yAxis"]["axisLabel"]["width"] < config.NARROW_LABEL_WIDTH
+
+
 def test_timeline_row_slider_is_themed():
     table = {}
     for i in range(config.ROWS_VISIBLE + 1):

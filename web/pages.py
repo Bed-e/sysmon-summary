@@ -84,7 +84,8 @@ def report_page(upload_id: str):
     box.set_visibility(bool(text))
     view["progress_box"] = box
     with ui.column().classes("app-card"):
-        with ui.tabs().classes("w-full") as tabs:
+        # Arrows let a phone reach the tabs that do not fit across the screen.
+        with ui.tabs().classes("w-full").props("mobile-arrows outside-arrows") as tabs:
             overview = ui.tab("Overview")
             chain_tab = ui.tab("Chains")
             iocs = ui.tab("IOCs")

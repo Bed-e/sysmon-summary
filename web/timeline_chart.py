@@ -2,8 +2,9 @@
 """
 
 from scoring.paths import file_name
-from web.config import (EVENT_TYPE_COLORS, LABEL_WIDTH, ROWS_VISIBLE,
-    SCORE_BARS, TIMELINE_COLORS)
+from web.config import (EVENT_TYPE_COLORS, LABEL_WIDTH, NARROW_CHART,
+    NARROW_GRID_TOP, NARROW_LABEL_WIDTH, ROWS_VISIBLE, SCORE_BARS,
+    TIMELINE_COLORS)
 from web.timeline_data import (event_detail, event_lane, row_label,
     score_level, time_in_ms)
 
@@ -34,6 +35,11 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
     False uses the "light" set.
     The legend wraps onto a second line instead of scrolling, so every group
     can be seen and clicked.
+    A "media" rule (worked out by ECharts in the browser, from the chart's
+    own width) narrows the name column to NARROW_LABEL_WIDTH when the chart
+    is under NARROW_CHART pixels wide, so a phone still has room for bars;
+    it also shrinks the legend and starts the rows at NARROW_GRID_TOP so the
+    legend's extra lines do not cover them.
     Used by: draw_process_timeline.
     """
     colors = TIMELINE_COLORS["dark" if dark else "light"]
@@ -135,4 +141,13 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
                                 "overflow": "truncate", "color": text}},
         "dataZoom": zoom,
         "series": series,
+        "media": [{"query": {"maxWidth": NARROW_CHART},
+                   "option": {"grid": {"left": NARROW_LABEL_WIDTH, "right": 25,
+                                       "top": NARROW_GRID_TOP},
+                              "legend": {"itemWidth": 12, "itemHeight": 8,
+                                         "itemGap": 6,
+                                         "textStyle": {"fontSize": 10}},
+                              "yAxis": {"axisLabel": {"fontSize": 10,
+                                  "margin": NARROW_LABEL_WIDTH - 10,
+                                  "width": NARROW_LABEL_WIDTH - 15}}}}],
     }

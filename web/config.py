@@ -128,6 +128,9 @@ CHAIN_CHOICES = 20  # chains offered in the timeline dropdown
 ROWS_VISIBLE = 40       # rows shown at once; more rows get a scroll slider
 ROW_HEIGHT = 24         # pixels per process row
 LABEL_WIDTH = 260       # pixels for the left-aligned process names
+NARROW_CHART = 600      # a chart narrower than this (a phone) uses...
+NARROW_LABEL_WIDTH = 125  # ...this narrower name column (10px names)
+NARROW_GRID_TOP = 100   # ...and starts the rows lower, under a 4-line legend
 INDENT = "   "  # non-breaking spaces: ECharts keeps them
 
 # Overview verdict (design.md section 8): score_level of the highest chain
