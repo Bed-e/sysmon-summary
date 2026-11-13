@@ -112,6 +112,18 @@ SCORE_BARS = [  # (score level, legend label, bar colour)
     ("flagged", "Process, score 1-%d" % (HIGH_SCORE - 1), "#f0a020"),
     ("high", "Process, score %d+" % HIGH_SCORE, "#d62020"),
 ]
+# Timeline chart colours per page theme. ECharts draws on a canvas and ignores
+# the page CSS, so make_process_timeline sets every colour from here.
+TIMELINE_COLORS = {
+    "light": {"text": "#333333", "line": "#cccccc", "link": "#555555",
+              "tip_bg": "#ffffff", "tip_border": "#cccccc",
+              "slider_bg": "#f3f5f9", "slider_fill": "rgba(59, 111, 214, 0.2)",
+              "slider_data": "#b8c4d8", "handle": "#ffffff"},
+    "dark": {"text": "#d4d9e3", "line": "#4a5568", "link": "#a0aec0",
+             "tip_bg": "#182030", "tip_border": "#4a5568",
+             "slider_bg": "#182030", "slider_fill": "rgba(108, 147, 236, 0.25)",
+             "slider_data": "#4a5568", "handle": "#9aa5b8"},
+}
 CHAIN_CHOICES = 20  # chains offered in the timeline dropdown
 ROWS_VISIBLE = 40       # rows shown at once; more rows get a scroll slider
 ROW_HEIGHT = 24         # pixels per process row

@@ -29,7 +29,7 @@ def draw_process_timeline(view, box, note, choice):
     visible = max(min(len(rows), ROWS_VISIBLE), 3)
     box.clear()
     with box:
-        height = visible * ROW_HEIGHT + 130
+        height = visible * ROW_HEIGHT + 154  # rows + legend, axis and slider
         ui.echart(option).classes("w-full").style("height: %dpx" % height)
     note.text = "%d processes shown." % len(rows)
 
