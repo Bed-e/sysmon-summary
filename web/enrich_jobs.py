@@ -11,6 +11,8 @@ import time
 from enrich import enrich_one, not_enriched
 from filters import load_config, split_iocs
 from iocs import collect_iocs
+from scoring.findings import find_findings
+from scoring.processes import build_process_scores
 from scoring.ranking import rank_iocs
 from web.config import BUDGET_REASON, USAGE_PATH
 from web.limits import add_daily_count, read_daily_count, seconds_to_wait
@@ -147,14 +149,19 @@ def make_state(name, parsed):
 
     Input: name, the uploaded file's base name (shown as a title only);
     parsed, the dict from parse.read_events.
-    Output: the state dict {name, events, iocs, skipped, ranked, results,
-    run, error, run_size, run_done, version}. No portal is called.
+    Output: the state dict {name, events, iocs, process_scores, skipped,
+    ranked, results, run, error, run_size, run_done, version}. Findings and
+    process scores are worked out once here (pipeline steps 3 and 4) and
+    read by every tab. No portal is called.
     Used by: upload_endpoint.
     """
     config = load_config()
-    iocs = collect_iocs(parsed["events"])
+    events = parsed["events"]
+    iocs = collect_iocs(events)
+    process_scores = build_process_scores(events, find_findings(events, iocs, config))
     to_rank, skipped = split_iocs(iocs, config)
-    ranked = rank_iocs(to_rank, parsed["events"], config)
-    return {"name": name, "events": parsed["events"], "iocs": iocs,
-            "skipped": skipped, "ranked": ranked, "results": [], "run": "idle",
+    ranked = rank_iocs(to_rank, process_scores)
+    return {"name": name, "events": events, "iocs": iocs,
+            "process_scores": process_scores, "skipped": skipped,
+            "ranked": ranked, "results": [], "run": "idle",
             "error": "", "run_size": 0, "run_done": 0, "version": 0}

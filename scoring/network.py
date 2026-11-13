@@ -1,35 +1,46 @@
-"""Network signals: unexpected processes, unusual ports and beaconing timing.
+"""Network signals: programs that rarely need the network, unusual ports and
+beaconing timing.
 """
 
 from datetime import datetime
 
 from scoring.config import (BEACON_MAX_SPREAD, BEACON_MIN_COUNT,
-    BEACON_MIN_MEAN_GAP, KNOWN_NETWORK_PROCESSES, NORMAL_PORTS,
-    WEIGHT_BEACONING, WEIGHT_UNEXPECTED_PROCESS, WEIGHT_UNUSUAL_PORT)
+    BEACON_MIN_MEAN_GAP, NORMAL_PORTS, RARE_NETWORK_PROCESSES,
+    WEIGHT_BEACONING, WEIGHT_RARE_NETWORK_PROCESS, WEIGHT_UNUSUAL_PORT)
 from scoring.paths import name_without_exe
 
 
 def network_signals(ip_events):
-    """From the event 3 records for one IP (outbound only): a process that is
-    not a known browser or updater, and an unusual port. Each fires once.
+    """Judge the outbound connections one process made to one IP.
+
+    Input: ip_events, the event 3 records for one (process, IP) pair, from
+    findings.network_findings. Inbound connections (Initiated=false) are
+    ignored.
+    Output: a list of (points, reason). It fires when the program is in
+    RARE_NETWORK_PROCESSES (powershell, rundll32, certutil, ...: programs
+    attackers use to download or call home), and when a port other than
+    80, 443 or 53 is used. Each fires at most once. A program not on the
+    list (a browser, OneDrive, svchost) never fires the first check.
+    Used by: findings.network_findings.
     """
     signals = []
-    unexpected = ""
+    rare = ""
     odd_port = ""
 
     for event in ip_events:
         if event["Initiated"].strip().lower() == "false":
             continue
         image = event["Image"]
-        if image != "" and name_without_exe(image) not in KNOWN_NETWORK_PROCESSES:
-            unexpected = unexpected or image
+        if image != "" and name_without_exe(image) in RARE_NETWORK_PROCESSES:
+            rare = rare or image
         port = event["DestinationPort"].strip()
         if port != "" and port not in NORMAL_PORTS:
             odd_port = odd_port or port
 
-    if unexpected:
-        signals.append((WEIGHT_UNEXPECTED_PROCESS,
-                        "connection from an unexpected process (%s)" % unexpected))
+    if rare:
+        signals.append((WEIGHT_RARE_NETWORK_PROCESS,
+                        "connection from a program that rarely needs the "
+                        "network (%s)" % rare))
     if odd_port:
         signals.append((WEIGHT_UNUSUAL_PORT,
                         "unusual destination port (%s)" % odd_port))

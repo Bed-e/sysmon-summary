@@ -2,22 +2,24 @@
 against the Sysmon schema and not against any sample dump.
 """
 
+from iocs import collect_iocs
 from parse import WANTED_FIELDS
 from scoring.config import (WEIGHT_BEACONING, WEIGHT_DOUBLE_EXTENSION,
-    WEIGHT_ODD_PARENT, WEIGHT_REGISTRY_AUTORUN, WEIGHT_TRUSTED_PATH,
-    WEIGHT_USER_WRITABLE_PATH)
+    WEIGHT_ENUMERATION, WEIGHT_LOOKALIKE, WEIGHT_ODD_PARENT,
+    WEIGHT_REGISTRY_AUTORUN, WEIGHT_REGISTRY_REFERENCE,
+    WEIGHT_RARE_NETWORK_PROCESS, WEIGHT_UNUSUAL_PORT, WEIGHT_USER_WRITABLE_PATH)
 from scoring.domains import dns_signals, entropy, levenshtein
+from scoring.findings import (dns_findings, enumeration_findings,
+    find_findings, hash_persistence_signal, make_finding, network_findings)
 from scoring.network import beaconing_signal, network_signals
 from scoring.paths import parent_child_signal, path_signals
 from scoring.processes import (build_process_scores, failed_lookup_signal,
     registry_persistence_signal)
-from scoring.ranking import (hash_persistence_signal, rank_iocs, score_ioc,
-    trusted_path_adjustment)
+from scoring.ranking import rank_iocs
 
 CONFIG = {
     "ranges": [],
     "ad_domains": [],
-    "trusted_paths": ["c:\\windows\\system32\\", "c:\\program files\\"],
     "well_known": ["google.com", "paypal.com", "microsoft.com"],
 }
 TEMP_EXE = "C:\\Users\\bob\\AppData\\Local\\Temp\\evil.exe"
@@ -127,63 +129,28 @@ def test_failed_lookup_threshold():
     assert failed_lookup_signal(4) == []
 
 
-# ---- build_process_scores ----
-
-def test_process_scores_path_parent_and_inheritance_sources():
-    events = [
-        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE,
-                   ParentImage="C:\\Office\\winword.exe"),
-        make_event(1, ProcessGuid="{B}", Image="C:\\Windows\\System32\\svchost.exe",
-                   ParentImage="C:\\Windows\\System32\\services.exe"),
-    ]
-    scores = build_process_scores(events)
-    assert scores["{A}"]["score"] == WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT
-    assert scores["{B}"]["score"] == 0
-
-
-def test_process_signal_counted_once_per_process():
-    key = "HKU\\x\\CurrentVersion\\Run\\a"
-    events = [make_event(13, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
-                         EventType="SetValue", TargetObject=key)] * 3
-    assert build_process_scores(events)["{A}"]["score"] == WEIGHT_REGISTRY_AUTORUN
-
-
-def test_failed_lookups_counted_per_process_across_names():
-    events = [make_event(22, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
-                         QueryName="n%d.example.com" % i, QueryStatus="9003")
-              for i in range(5)]
-    events.append(make_event(22, ProcessGuid="{B}", Image="C:\\Windows\\y.exe",
-                             QueryName="z.example.com", QueryStatus="9003"))
-    events.append(make_event(22, ProcessGuid="{B}", Image="C:\\Windows\\y.exe",
-                             QueryName="ok.example.com", QueryStatus="0"))
-    scores = build_process_scores(events)
-    assert scores["{A}"]["score"] == 15
-    assert scores["{B}"]["score"] == 0
-
-
-def test_empty_query_status_is_not_a_failure():
-    events = [make_event(22, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
-                         QueryName="n%d.example.com" % i, QueryStatus="")
-              for i in range(6)]
-    assert build_process_scores(events)["{A}"]["score"] == 0
-
-
 # ---- network_signals ----
 
-def test_unexpected_process_and_unusual_port():
-    event = make_event(3, Image="C:\\x\\tool.exe", Initiated="true",
+POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def test_rare_network_program_and_unusual_port():
+    event = make_event(3, Image=POWERSHELL, Initiated="true",
                        DestinationIp="8.8.8.8", DestinationPort="4444")
-    assert points(network_signals([event])) == [20, 10]
+    assert points(network_signals([event])) == [WEIGHT_RARE_NETWORK_PROCESS,
+                                                 WEIGHT_UNUSUAL_PORT]
 
 
-def test_browser_on_normal_port_fires_nothing():
-    event = make_event(3, Image="C:\\Program Files\\Google\\chrome.exe",
-                       Initiated="true", DestinationPort="443")
-    assert network_signals([event]) == []
+def test_normal_programs_on_normal_ports_fire_nothing():
+    for image in ["C:\\Program Files\\Google\\chrome.exe",
+                  "C:\\Users\\bob\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
+                  "C:\\Windows\\System32\\svchost.exe", "C:\\x\\tool.exe"]:
+        event = make_event(3, Image=image, Initiated="true", DestinationPort="443")
+        assert network_signals([event]) == [], image
 
 
 def test_inbound_connection_is_ignored_and_missing_fields_are_unknown():
-    inbound = make_event(3, Image="C:\\x\\tool.exe", Initiated="false", DestinationPort="4444")
+    inbound = make_event(3, Image=POWERSHELL, Initiated="false", DestinationPort="4444")
     unknown = make_event(3, Initiated="true")
     assert network_signals([inbound, unknown]) == []
 
@@ -247,7 +214,96 @@ def test_real_name_and_its_subdomain_are_not_lookalikes():
     assert dns_signals("mail.google.com", CONFIG["well_known"]) == []
 
 
-# ---- hash signals ----
+# ---- fixes: IFEO value and double counting ----
+
+IFEO = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"
+
+
+def test_ifeo_debugger_value_fires_but_other_values_do_not():
+    hijack = make_event(13, EventType="SetValue", TargetObject=IFEO + "notepad.exe\\Debugger")
+    audit = make_event(13, EventType="SetValue", TargetObject=IFEO + "LSASS.exe\\AuditLevel")
+    assert points(registry_persistence_signal(hijack)) == [WEIGHT_REGISTRY_AUTORUN]
+    assert registry_persistence_signal(audit) == []
+
+
+# ---- findings ----
+
+def scores_for(events):
+    """Run steps 2-4 on hand-built events: findings, then process scores."""
+    iocs = collect_iocs(events)
+    return build_process_scores(events, find_findings(events, iocs, CONFIG))
+
+
+def test_make_finding_kind_follows_subject():
+    assert make_finding("{A}", (5, "x"))["kind"] == "process"
+    finding = make_finding("{A}", (5, "x"), ("ip", "1.2.3.4"))
+    assert finding["kind"] == "subject" and finding["subject"] == ("ip", "1.2.3.4")
+
+
+def test_process_scores_path_and_parent():
+    events = [
+        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE,
+                   ParentImage="C:\\Office\\winword.exe"),
+        make_event(1, ProcessGuid="{B}", Image="C:\\Windows\\System32\\svchost.exe",
+                   ParentImage="C:\\Windows\\System32\\services.exe"),
+    ]
+    scores = scores_for(events)
+    assert scores["{A}"]["score"] == WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT
+    assert all(f["kind"] == "process" for f in scores["{A}"]["findings"])
+    assert scores["{B}"] == {"image": "C:\\Windows\\System32\\svchost.exe",
+                             "score": 0, "findings": []}
+
+
+def test_process_signal_counted_once_per_process():
+    key = "HKU\\x\\CurrentVersion\\Run\\a"
+    events = [make_event(13, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
+                         EventType="SetValue", TargetObject=key)] * 3
+    assert scores_for(events)["{A}"]["score"] == WEIGHT_REGISTRY_AUTORUN
+
+
+def test_failed_lookups_counted_per_process_across_names():
+    events = [make_event(22, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
+                         QueryName="n%d.example.com" % i, QueryStatus="9003")
+              for i in range(5)]
+    events.append(make_event(22, ProcessGuid="{B}", Image="C:\\Windows\\y.exe",
+                             QueryName="z.example.com", QueryStatus="9003"))
+    events.append(make_event(22, ProcessGuid="{B}", Image="C:\\Windows\\y.exe",
+                             QueryName="ok.example.com", QueryStatus="0"))
+    scores = scores_for(events)
+    assert scores["{A}"]["score"] == 15
+    assert scores["{B}"]["score"] == 0
+
+
+def test_empty_query_status_is_not_a_failure():
+    events = [make_event(22, ProcessGuid="{A}", Image="C:\\Windows\\x.exe",
+                         QueryName="n%d.example.com" % i, QueryStatus="")
+              for i in range(6)]
+    assert scores_for(events)["{A}"]["score"] == 0
+
+
+def test_network_findings_are_per_process_and_ip():
+    events = [
+        make_event(3, ProcessGuid="{T}", Image=POWERSHELL, Initiated="true",
+                   DestinationIp="8.8.8.8", DestinationPort="4444"),
+        make_event(3, ProcessGuid="{C}", Image="C:\\Program Files\\chrome.exe",
+                   Initiated="true", DestinationIp="8.8.8.8", DestinationPort="443"),
+    ]
+    found = network_findings(events)
+    assert [(f["guid"], f["points"]) for f in found] == [
+        ("{T}", WEIGHT_RARE_NETWORK_PROCESS), ("{T}", WEIGHT_UNUSUAL_PORT)]
+    assert all(f["subject"] == ("ip", "8.8.8.8") for f in found)
+
+
+def test_dns_findings_go_to_every_process_that_asked():
+    events = [make_event(22, ProcessGuid=guid, QueryName="PayPa1.com.")
+              for guid in ["{A}", "{B}", "{A}"]]
+    found = dns_findings(events, CONFIG["well_known"])
+    assert [f["guid"] for f in found] == ["{A}", "{B}"]
+    assert found[0]["subject"] == ("dns", "paypa1.com")
+    assert found[0]["points"] == WEIGHT_LOOKALIKE
+
+
+# ---- hash findings ----
 
 def test_registry_reference_matches_full_path_only():
     key_event = make_event(13, EventType="SetValue",
@@ -272,107 +328,145 @@ def test_registry_reference_outside_autorun_keys_is_ignored():
     assert hash_persistence_signal([TEMP_EXE], [inventory]) == []
 
 
-def test_trusted_path_adjustment_all_paths_must_be_trusted():
-    trusted = CONFIG["trusted_paths"]
-    assert points(trusted_path_adjustment(["C:\\Windows\\System32\\a.exe"], trusted)) == [WEIGHT_TRUSTED_PATH]
-    assert trusted_path_adjustment(["C:\\Windows\\System32\\a.exe", TEMP_EXE], trusted) == []
-    assert trusted_path_adjustment([], trusted) == []
-
-
-# ---- score_ioc / rank_iocs ----
-
-def test_ioc_inherits_only_the_highest_scoring_process():
-    events = [
-        make_event(1, ProcessGuid="{BAD}", Image=TEMP_EXE,
-                   ParentImage="C:\\Office\\winword.exe"),
-        make_event(1, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
-                   ParentImage="C:\\Windows\\System32\\services.exe"),
-        make_event(3, ProcessGuid="{BAD}", Image=TEMP_EXE, Initiated="true",
-                   DestinationIp="8.8.8.8", DestinationPort="443"),
-        make_event(3, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
-                   Initiated="true", DestinationIp="8.8.8.8", DestinationPort="443"),
-    ]
-    item = {"type": "ip", "value": "8.8.8.8",
-            "record": {"count": 2, "first_seen": "", "process_guids": ["{OK}", "{BAD}"]}}
-    process_scores = build_process_scores(events)
-    from scoring.ranking import group_ip_events
-    score, reasons = score_ioc(item, process_scores, group_ip_events(events), [], CONFIG)
-    # network: unexpected process (+20); inherited from {BAD} only: 20 + 25
-    assert score == 20 + WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT
-    assert any("evil.exe" in reason for reason in reasons)
-
-
-def test_hash_inherits_path_points_once_from_its_process():
-    events = [make_event(1, ProcessGuid="{A}", Image=TEMP_EXE, ParentImage="C:\\x\\a.exe")]
-    item = {"type": "hash", "value": "a" * 64,
-            "record": {"count": 1, "first_seen": "", "process_guids": ["{A}"],
-                       "images": [TEMP_EXE]}}
-    score, reasons = score_ioc(item, build_process_scores(events), {}, [], CONFIG)
-    assert score == WEIGHT_USER_WRITABLE_PATH
-    assert len(reasons) == 1
-
-
-def test_trusted_hash_is_ranked_below_untrusted_but_not_removed():
-    events = [
-        make_event(1, ProcessGuid="{T}", Image="C:\\Windows\\System32\\a.exe", ParentImage="C:\\x\\p.exe"),
-        make_event(1, ProcessGuid="{U}", Image=TEMP_EXE, ParentImage="C:\\x\\p.exe"),
-    ]
-    to_rank = [
-        {"type": "hash", "value": "t" * 64,
-         "record": {"count": 5, "first_seen": "", "process_guids": ["{T}"],
-                    "images": ["C:\\Windows\\System32\\a.exe"]}},
-        {"type": "hash", "value": "u" * 64,
-         "record": {"count": 1, "first_seen": "", "process_guids": ["{U}"],
-                    "images": [TEMP_EXE]}},
-    ]
-    ranked = rank_iocs(to_rank, events, CONFIG)
-    assert [r["value"] for r in ranked] == ["u" * 64, "t" * 64]
-    assert ranked[1]["score"] == WEIGHT_TRUSTED_PATH
-
-
-def test_rank_order_ties_broken_by_count_then_first_seen():
-    to_rank = [
-        {"type": "dns", "value": "a.example.com",
-         "record": {"count": 1, "first_seen": "2024-01-02", "process_guids": []}},
-        {"type": "dns", "value": "b.example.com",
-         "record": {"count": 3, "first_seen": "2024-01-03", "process_guids": []}},
-        {"type": "dns", "value": "c.example.com",
-         "record": {"count": 1, "first_seen": "2024-01-01", "process_guids": []}},
-    ]
-    ranked = rank_iocs(to_rank, [], CONFIG)
-    assert [r["value"] for r in ranked] == ["b.example.com", "c.example.com", "a.example.com"]
-
-
-# ---- fixes: IFEO value and double counting ----
-
-IFEO = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"
-
-
-def test_ifeo_debugger_value_fires_but_other_values_do_not():
-    hijack = make_event(13, EventType="SetValue", TargetObject=IFEO + "notepad.exe\\Debugger")
-    audit = make_event(13, EventType="SetValue", TargetObject=IFEO + "LSASS.exe\\AuditLevel")
-    assert points(registry_persistence_signal(hijack)) == [WEIGHT_REGISTRY_AUTORUN]
-    assert registry_persistence_signal(audit) == []
-
-
 def test_hash_reference_ignores_writes_by_its_own_process():
     own_write = make_event(13, ProcessGuid="{A}", EventType="SetValue",
                            TargetObject="HKU\\x\\CurrentVersion\\Run\\a", Details=TEMP_EXE)
     assert hash_persistence_signal([TEMP_EXE], [own_write], ["{A}"]) == []
-    # the same write by a different process still counts
     assert points(hash_persistence_signal([TEMP_EXE], [own_write], ["{OTHER}"])) == [40]
+
+
+HASH = "a" * 64
+
+
+def test_hash_finding_lands_on_the_process_that_ran_the_file():
+    events = [
+        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE, ParentImage="C:\\x\\p.exe",
+                   Hashes="SHA256=" + HASH.upper()),
+        make_event(13, ProcessGuid="{W}", Image="C:\\Windows\\reg.exe", EventType="SetValue",
+                   TargetObject="HKU\\x\\CurrentVersion\\Run\\a", Details=TEMP_EXE),
+    ]
+    scores = scores_for(events)
+    subject = [f for f in scores["{A}"]["findings"] if f["kind"] == "subject"]
+    assert [(f["points"], f["subject"]) for f in subject] == [
+        (WEIGHT_REGISTRY_REFERENCE, ("hash", HASH))]
+    # the writer gets its own autorun finding, not the hash one
+    assert scores["{W}"]["score"] == WEIGHT_REGISTRY_AUTORUN
+
+
+# ---- enumeration burst ----
+
+def child(name, second, parent="{SH}"):
+    return make_event(1, time="2024-05-01 10:00:%02d" % second,
+                      ProcessGuid="{%s%d}" % (name, second),
+                      Image="C:\\Windows\\System32\\%s.exe" % name,
+                      ParentProcessGuid=parent)
+
+
+def test_enumeration_burst_goes_to_the_parent():
+    events = [child("whoami", 0), child("ipconfig", 10), child("net", 20)]
+    found = enumeration_findings(events)
+    assert len(found) == 1
+    assert found[0]["guid"] == "{SH}" and found[0]["points"] == WEIGHT_ENUMERATION
+    assert "whoami, ipconfig, net" in found[0]["reason"]
+
+
+def test_enumeration_needs_enough_commands_in_the_window():
+    assert enumeration_findings([child("whoami", 0), child("net", 10)]) == []
+    spread = [child("whoami", 0),
+              make_event(1, time="2024-05-01 10:10:00", ProcessGuid="{N}",
+                         Image="C:\\Windows\\System32\\net.exe", ParentProcessGuid="{SH}"),
+              make_event(1, time="2024-05-01 10:20:00", ProcessGuid="{I}",
+                         Image="C:\\Windows\\System32\\ipconfig.exe", ParentProcessGuid="{SH}")]
+    assert enumeration_findings(spread) == []
+
+
+def test_enumeration_is_counted_per_parent_and_ignores_other_programs():
+    events = [child("whoami", 0, "{X}"), child("net", 5, "{Y}"),
+              child("ipconfig", 9, "{X}"), child("notepad", 12, "{X}")]
+    assert enumeration_findings(events) == []
+
+
+def test_process_with_findings_but_no_event_gets_an_entry():
+    events = [child("whoami", 0), child("ipconfig", 10), child("net", 20)]
+    scores = scores_for(events)
+    assert scores["{SH}"]["image"] == "" and scores["{SH}"]["score"] == WEIGHT_ENUMERATION
+
+
+# ---- rank_iocs: split inheritance ----
+
+def item(ioc_type, value, guids, count=1, first_seen=""):
+    return {"type": ioc_type, "value": value,
+            "record": {"count": count, "first_seen": first_seen, "process_guids": guids}}
+
+
+def test_ioc_inherits_process_findings_of_the_strongest_process_only():
+    events = [
+        make_event(1, ProcessGuid="{BAD}", Image=TEMP_EXE, ParentImage="C:\\Office\\winword.exe"),
+        make_event(1, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
+                   ParentImage="C:\\Windows\\System32\\services.exe"),
+        make_event(3, ProcessGuid="{BAD}", Image=TEMP_EXE, Initiated="true",
+                   DestinationIp="8.8.8.8", DestinationPort="4444"),
+        make_event(3, ProcessGuid="{OK}", Image="C:\\Windows\\System32\\svchost.exe",
+                   Initiated="true", DestinationIp="8.8.8.8", DestinationPort="4444"),
+    ]
+    ranked = rank_iocs([item("ip", "8.8.8.8", ["{OK}", "{BAD}"])], scores_for(events))
+    # the unusual-port reason is the same text from both processes, so it
+    # counts once; plus {BAD}'s process findings once ({OK} has none)
+    assert ranked[0]["score"] == (WEIGHT_UNUSUAL_PORT
+                                  + WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT)
+    assert any("process evil.exe:" in reason for reason in ranked[0]["reasons"])
+
+
+def test_process_score_counts_a_repeated_reason_once():
+    events = [make_event(3, ProcessGuid="{P}", Image=POWERSHELL, Initiated="true",
+                         DestinationIp="8.8.8.%d" % i, DestinationPort="443")
+              for i in range(1, 31)]
+    process = scores_for(events)["{P}"]
+    # 30 IPs, 30 findings kept for the IOC table, but scored once
+    assert len([f for f in process["findings"] if f["kind"] == "subject"]) == 30
+    assert process["score"] == WEIGHT_RARE_NETWORK_PROCESS
+
+
+def test_process_score_counts_different_reasons_separately():
+    events = [make_event(3, ProcessGuid="{P}", Image="C:\\Windows\\x.exe", Initiated="true",
+                         DestinationIp="8.8.8.%d" % i, DestinationPort=port)
+              for i, port in [(1, "4444"), (2, "8080"), (3, "4444")]]
+    assert scores_for(events)["{P}"]["score"] == 2 * WEIGHT_UNUSUAL_PORT
+
+
+def test_subject_finding_does_not_spread_to_other_iocs_of_the_same_process():
+    events = [make_event(22, ProcessGuid="{C}", Image="C:\\Program Files\\chrome.exe",
+                         QueryName=name) for name in ["paypa1.com", "example.org"]]
+    ranked = rank_iocs([item("dns", "paypa1.com", ["{C}"]),
+                        item("dns", "example.org", ["{C}"])], scores_for(events))
+    by_value = {r["value"]: r["score"] for r in ranked}
+    assert by_value == {"paypa1.com": WEIGHT_LOOKALIKE, "example.org": 0}
+
+
+def test_same_subject_reason_from_many_processes_counts_once():
+    events = [make_event(22, ProcessGuid=guid, QueryName="paypa1.com")
+              for guid in ["{A}", "{B}", "{C}"]]
+    ranked = rank_iocs([item("dns", "paypa1.com", ["{A}", "{B}", "{C}"])],
+                       scores_for(events))
+    assert ranked[0]["score"] == WEIGHT_LOOKALIKE
 
 
 def test_file_that_sets_its_own_autorun_is_counted_once():
     key = "HKU\\x\\CurrentVersion\\Run\\a"
     events = [
-        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE, ParentImage="C:\\x\\p.exe"),
+        make_event(1, ProcessGuid="{A}", Image=TEMP_EXE, ParentImage="C:\\x\\p.exe",
+                   Hashes="SHA256=" + HASH),
         make_event(13, ProcessGuid="{A}", Image=TEMP_EXE, EventType="SetValue",
                    TargetObject=key, Details=TEMP_EXE),
     ]
-    item = {"type": "hash", "value": "a" * 64,
-            "record": {"count": 1, "first_seen": "", "process_guids": ["{A}"],
-                       "images": [TEMP_EXE]}}
-    registry = [e for e in events if e["event_id"] == 13]
-    score, reasons = score_ioc(item, build_process_scores(events), {}, registry, CONFIG)
-    assert score == WEIGHT_USER_WRITABLE_PATH + WEIGHT_REGISTRY_AUTORUN
+    ranked = rank_iocs([item("hash", HASH, ["{A}"])], scores_for(events))
+    assert ranked[0]["score"] == WEIGHT_USER_WRITABLE_PATH + WEIGHT_REGISTRY_AUTORUN
+
+
+def test_rank_order_ties_broken_by_count_then_first_seen():
+    to_rank = [item("dns", "a.example.com", [], 1, "2024-01-02"),
+               item("dns", "b.example.com", [], 3, "2024-01-03"),
+               item("dns", "c.example.com", [], 1, "2024-01-01")]
+    ranked = rank_iocs(to_rank, {})
+    assert [r["value"] for r in ranked] == ["b.example.com", "c.example.com", "a.example.com"]
+

@@ -119,13 +119,13 @@ def test_load_list_missing_file_is_empty(tmp_path):
 
 def test_load_config_skips_bad_cidr_and_lowercases(tmp_path):
     (tmp_path / "shared_ranges.txt").write_text("1.2.3.0/24\nnot-a-cidr\n", encoding="utf-8")
-    (tmp_path / "trusted_paths.txt").write_text("C:\\Windows\\\n", encoding="utf-8")
+    (tmp_path / "well_known_names.txt").write_text("Google.COM\n", encoding="utf-8")
     config = load_config(str(tmp_path))
     assert len(config["ranges"]) == 1
-    assert config["trusted_paths"] == ["c:\\windows\\"]
+    assert config["well_known"] == ["google.com"]
     assert config["ad_domains"] == []
 
 
 def test_load_config_real_data_dir_loads():
     config = load_config("data")
-    assert config["ranges"] and config["trusted_paths"] and config["well_known"]
+    assert config["ranges"] and config["well_known"]

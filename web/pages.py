@@ -6,7 +6,6 @@ tab's content comes from web/tabs/.
 
 from nicegui import ui
 
-from scoring.processes import build_process_scores
 from web.actions import refresh_view
 from web.config import REFRESH_SECONDS, UPLOAD_ERRORS, UPLOAD_FORM
 from web.runtime import UPLOADS
@@ -57,7 +56,7 @@ def report_page(upload_id: str):
     Input: upload_id, from the URL; a key of UPLOADS.
     Output: draws the page. An unknown id (for example after a server
     restart) shows a message and a link to upload again. The process scores
-    are worked out once here for the storylines and the timeline.
+    come from the state (worked out once at upload).
     """
     theme = page_setup()
     state = UPLOADS.get(upload_id)
@@ -68,7 +67,7 @@ def report_page(upload_id: str):
             ui.link("Upload again", "/")
         return
     view = {"state": state, "upload_id": upload_id,
-            "process_scores": build_process_scores(state["events"]),
+            "process_scores": state["process_scores"],
             "seen": (state["version"], state["run"]), "theme": theme}
     with ui.row().classes("app-card items-center justify-between"):
         ui.label("File: " + state["name"]).classes("app-title")

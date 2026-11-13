@@ -67,13 +67,13 @@ SHORT_REASONS = [
     ("service started a program from a user-writable path",
      "was started by a service from a user folder", False),
     ("writes an autorun registry key", "sets an autorun registry key", False),
-    ("connection from an unexpected process", "contacted by an unexpected program", False),
+    ("connection from a program that rarely needs the network",
+     "contacted by a program that rarely needs the network", False),
     ("unusual destination port", "unusual port", True),
     ("very long label", "very long DNS label", False),
     ("high-entropy label", "random-looking DNS label", False),
     ("registry references this file's path", "an autorun key points to this file", False),
-    ("all copies run from protected system paths",
-     "only seen in system folders (lowers the score)", False),
+    ("burst of discovery commands", "started a burst of discovery commands", True),
 ]
 
 # Portal labels that count as a "portal hit" in a storyline summary.

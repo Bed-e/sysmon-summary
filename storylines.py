@@ -10,16 +10,14 @@ Flow:
                                           -> link_children
     ranked  (scoring.rank_iocs)           -> attach_ioc_results
     results (enrich.enrich_ranked)        -> attach_ioc_results
-    scoring.build_process_scores          -> score_storyline
+    process_scores (scoring.build_process_scores) -> score_storyline
     build_storylines runs all of the above and returns the sorted result,
     which report.py (M4) and later web/app.py (M5) turn into a page.
 
-Scores are policy numbers, not a verdict. A storyline is ranked by the
-HIGHEST local score in its tree (not a sum). Portal scores are shown beside
-the local score and are never merged into it (design.md section 6).
+A storyline is ranked by the HIGHEST local score in its tree (not a sum).
+Portal scores are shown beside the local score and are never merged into
+it. (R2 turns storylines into chains, design.md section 5.)
 """
-
-from scoring.processes import build_process_scores
 
 NOT_REQUESTED = "not requested"
 
@@ -207,7 +205,7 @@ def score_storyline(table, root_guid, process_scores):
     """Score one storyline by its single highest local score.
 
     Input: table (children linked, IOCs attached); root_guid; and
-    process_scores from scoring.build_process_scores(events).
+    process_scores from scoring.build_process_scores.
     Output: (score, reasons). The score is the highest local score of any
     process or IOC in the tree. The reasons are that item's own reasons plus
     one line counting the other scored items. Never a sum, never portal
@@ -225,8 +223,8 @@ def score_storyline(table, root_guid, process_scores):
             if best_score is None or process["score"] > best_score:
                 who = entry["image"] or "unknown process"
                 best_score = process["score"]
-                best_reasons = ["process %s: %+d %s" % (who, points, reason)
-                                for points, reason in process["signals"]]
+                best_reasons = ["process %s: %+d %s" % (who, f["points"], f["reason"])
+                                for f in process["findings"]]
         for ioc in entry["iocs"]:
             scored_items += 1
             if best_score is None or ioc["local_score"] > best_score:
@@ -242,11 +240,12 @@ def score_storyline(table, root_guid, process_scores):
     return best_score, best_reasons
 
 
-def build_storylines(events, ranked, results):
+def build_storylines(events, ranked, results, process_scores):
     """Build the ranked storylines for one dump.
 
     Input: events (parse.read_events), ranked (scoring.rank_iocs), results
-    (enrich.enrich_ranked, or [] with --no-enrich).
+    (enrich.enrich_ranked, or [] with --no-enrich), process_scores
+    (scoring.build_process_scores, worked out once per dump).
     Output: {"table": {guid: entry},
              "storylines": [{"root": guid, "score": int, "reasons": [...],
                              "size": processes in the tree,
@@ -260,7 +259,6 @@ def build_storylines(events, ranked, results):
     skipped = attach_activity(table, events)
     roots = link_children(table)
     attach_ioc_results(table, ranked, results)
-    process_scores = build_process_scores(events)
 
     storylines = []
     for root in roots:

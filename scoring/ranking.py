@@ -1,119 +1,77 @@
-"""Item-level scoring and ranking: combine the signals for one IOC and sort all
-IOCs, highest score first. rank_iocs is the entry point used by the rest of
-the project.
+"""Step 6 (IOC part): rank the IOCs from the process findings.
+
+IOCs have no scoring rules of their own. An IOC's score is built from the
+findings worked out in steps 3 and 4 ("split inheritance", design.md
+section 6):
+  - every subject finding about this IOC, from any process that touched it
+    (each distinct reason counted once, so a lookalike name queried by
+    five processes is not counted five times), plus
+  - the process findings of the touching process with the most
+    process-wide points.
+So a lookalike domain ranks high, but the other names the same browser
+looked up do not inherit that clue.
+
+The result of rank_iocs is a list, highest score first:
+    [{"type": "ip", "value": "8.8.8.8", "score": 45,
+      "reasons": ["+25 ...", "+20 process evil.exe: ..."], "record": {...}}, ...]
 """
 
-from iocs import ip_from_event, normalize_ip
-from scoring.config import (REGISTRY_EVENT_IDS, WEIGHT_REGISTRY_REFERENCE,
-    WEIGHT_TRUSTED_PATH)
-from scoring.domains import dns_signals
-from scoring.network import beaconing_signal, network_signals
-from scoring.paths import file_name, lower_path
-from scoring.processes import build_process_scores, registry_persistence_signal
+from scoring.paths import file_name
+from scoring.processes import process_wide_points
 
 
-def hash_persistence_signal(images, registry_events, own_guids=()):
-    """A registry write to an autorun location (the same test as
-    registry_persistence_signal) whose TargetObject or Details contains the
-    file's full path (lowercased plain substring). A bare filename never
-    matches, and neither does a path that merely appears in some other key
-    (for example a Windows application inventory entry).
-    Writes made by the file's own processes (`own_guids`) are ignored: a
-    process that sets its own autorun key is already scored once as a
-    process-level signal, so counting it here would be the same evidence
-    twice.
+def score_ioc(item, process_scores):
+    """Score one IOC by split inheritance.
+
+    Input: item, {"type", "value", "record"} from filters.split_iocs (the
+    record's "process_guids" lists every process that touched it);
+    process_scores from processes.build_process_scores.
+    Output: (score, reasons). reasons is a list of text such as
+    "+30 looks like paypal.com" (about this IOC) and
+    "+25 process evil.exe: document app started a program (...)"
+    (inherited). A guid missing from process_scores is ignored.
+    Used by: rank_iocs.
     """
-    for image in images:
-        needle = lower_path(image)
-        if needle == "":
-            continue
-        for event in registry_events:
-            if not registry_persistence_signal(event):
-                continue
-            if event["ProcessGuid"] in own_guids:
-                continue
-            text = lower_path(event["TargetObject"] + " " + event.get("Details", ""))
-            if needle in text:
-                return [(WEIGHT_REGISTRY_REFERENCE,
-                         "registry references this file's path (%s)" % image)]
-    return []
-
-
-def trusted_path_adjustment(images, trusted_paths):
-    """Take points off when EVERY path for the hash is in a protected
-    location. Weak evidence: it only lowers the order.
-    """
-    if not images or not trusted_paths:
-        return []
-    for image in images:
-        lowered = image.lower()
-        if not any(lowered.startswith(prefix) for prefix in trusted_paths):
-            return []
-    return [(WEIGHT_TRUSTED_PATH,
-             "all copies run from protected system paths (weak evidence)")]
-
-
-def score_ioc(item, process_scores, ip_events, registry_events, config):
-    """Score one IOC. Returns (score, reasons) where reasons is a list of
-    text like '+25 document app started a program (...)'.
-    """
-    ioc_type = item["type"]
-    value = item["value"]
-    record = item["record"]
+    subject = (item["type"], item["value"])
     signals = []
-
-    if ioc_type == "ip":
-        events = ip_events.get(value, [])
-        signals.extend(network_signals(events))
-        signals.extend(beaconing_signal([event["time"] for event in events]))
-    elif ioc_type == "dns":
-        signals.extend(dns_signals(value, config["well_known"]))
-    elif ioc_type == "hash":
-        images = record.get("images", [])
-        signals.extend(hash_persistence_signal(images, registry_events,
-                                               record["process_guids"]))
-        signals.extend(trusted_path_adjustment(images, config["trusted_paths"]))
-
-    # Inherit from the single highest-scoring process that touched it.
+    seen_reasons = set()
     best = None
-    for guid in record["process_guids"]:
+    for guid in item["record"]["process_guids"]:
         process = process_scores.get(guid)
-        if process is not None and (best is None or process["score"] > best["score"]):
+        if process is None:
+            continue
+        for finding in process["findings"]:
+            if finding["subject"] == subject and finding["reason"] not in seen_reasons:
+                seen_reasons.add(finding["reason"])
+                signals.append((finding["points"], finding["reason"]))
+        if best is None or process_wide_points(process) > process_wide_points(best):
             best = process
+
     if best is not None:
         who = file_name(best["image"]) or "unknown process"
-        for points, reason in best["signals"]:
-            signals.append((points, "process %s: %s" % (who, reason)))
+        for finding in best["findings"]:
+            if finding["kind"] == "process":
+                signals.append((finding["points"],
+                                "process %s: %s" % (who, finding["reason"])))
 
     score = sum(points for points, reason in signals)
     reasons = ["%+d %s" % (points, reason) for points, reason in signals]
     return score, reasons
 
 
-def group_ip_events(events):
-    """Group event 3 records by their remote IPv4: {ip: [events]}."""
-    table = {}
-    for event in events:
-        if event["event_id"] != 3:
-            continue
-        ip = normalize_ip(ip_from_event(event))
-        if ip is not None:
-            table.setdefault(ip, []).append(event)
-    return table
+def rank_iocs(to_rank, process_scores):
+    """Score every IOC in `to_rank` and return them highest score first.
 
-
-def rank_iocs(to_rank, events, config):
-    """Score every IOC in `to_rank` and return them highest score first
-    (ties: more sightings first, then earliest first seen).
+    Input: to_rank from filters.split_iocs; process_scores from
+    processes.build_process_scores (worked out once per dump).
+    Output: a list of {"type", "value", "score", "reasons", "record"}.
+    Ties: more sightings first, then earliest first seen.
+    Used by: web.enrich_jobs.make_state (and main.py until R4). The IOC
+    table, the enrich code and the storylines read the result.
     """
-    process_scores = build_process_scores(events)
-    ip_events = group_ip_events(events)
-    registry_events = [e for e in events if e["event_id"] in REGISTRY_EVENT_IDS]
-
     ranked = []
     for item in to_rank:
-        score, reasons = score_ioc(item, process_scores, ip_events,
-                                   registry_events, config)
+        score, reasons = score_ioc(item, process_scores)
         ranked.append({
             "type": item["type"],
             "value": item["value"],

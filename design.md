@@ -50,13 +50,13 @@ A **finding** is one local clue about one process:
  "kind": "process" | "subject", "subject": ("ip", "1.2.3.4") or None}
 ```
 
-- **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, the **enumeration burst**, and the trusted-path negative (every copy runs from a protected system path; small minus, weak evidence).
+- **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, and the **enumeration burst**. There is no minus for running from a system folder: living-off-the-land binaries (`rundll32`, `powershell`) doing bad things must not be discounted.
 - **Subject findings** are about one IOC the process touched, worked out per process:
-  - IP: the connection comes from an unexpected process (not a browser or known updater), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing).
+  - IP: the connection comes from a program that rarely needs the network but that attackers use to download or call home (`powershell`, `cmd`, `mshta`, `rundll32`, `certutil`, `bitsadmin`, ...: `RARE_NETWORK_PROCESSES`), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing). *Previously* any program not on a short browser allowlist fired, which flagged OneDrive, Teams and svchost.
   - DNS: very long or high-entropy label, or a close lookalike of a well-known name.
   - Hash: an autorun registry value written by *another* process contains this file's full path (lowercased substring; a bare filename never matches).
 - **Enumeration burst:** `ENUM_MIN_COUNT` or more discovery commands (`whoami`, `ipconfig`, `net`/`net1`, `systeminfo`, `nltest`, `tasklist`, `netstat`, `quser`, `arp`, `route`, `hostname`, ...) started by the **same parent** within `ENUM_WINDOW_SECONDS`. The points go to the parent (the shell doing the recon).
-- **Process score** = the sum of its findings. It is worked out once, kept in the upload's state, and read by the chains, the IOC table and the timeline.
+- **Process score** = the sum of its findings, with each reason text counted once per process. A process reaching 30 addresses keeps 30 findings (one per IP, for the IOC table) but scores the clue once. It is worked out once, kept in the upload's state, and read by the chains, the IOC table and the timeline.
 
 Weights, thresholds and word lists are named constants in `scoring/config.py`. Known limit: paths with environment variables, quotes or arguments can be missed. A miss means "nothing pointed at it", never "no persistence".
 
@@ -150,7 +150,7 @@ The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / r
 | `web/tabs/` | one module per tab: overview, chains, iocs, timeline, stats |
 | `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, rows and chart data for the tabs; no UI code |
 | `web/config.py`, `web/theme.py` | constants, columns, colours; theme and header |
-| `data/*.txt` | shared ranges, AD domains, trusted paths, well-known names, API limits |
+| `data/*.txt` | shared ranges, AD domains, well-known names, API limits |
 
 *Previously* `main.py` (command line) and `report.py` (static HTML) existed. They are removed in R4; the web app is the only interface.
 
@@ -168,17 +168,16 @@ The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / r
 
 ## 11. Open questions
 
-- `ENUM_MIN_COUNT` and `ENUM_WINDOW_SECONDS` (proposed: 3 commands in 5 minutes).
+- Are `ENUM_MIN_COUNT` = 3 and `ENUM_WINDOW_SECONDS` = 300 right? Neither sample dump has a burst.
 - Are the verdict bands (0 / 1–39 / 40+) right once real dumps are scored with findings?
 - Where do the CDN ranges and the well-known-names list come from, and how are they kept up to date?
-- Should signature data (Sysmon events 6 and 7) lower the trusted-path doubt when a dump has it?
 
 ## 12. Milestones
 
 Each milestone is on its own branch. Bed-e opens the pull requests.
 
 - **R0 Design.** This file.
-- **R1 Findings.** `scoring/` produces findings with kind and subject, adds the enumeration burst and per-process network findings, and builds `process_scores` once. Tests rewritten to findings.
+- **R1 Findings.** `scoring/` produces findings with kind and subject, adds the enumeration burst and per-process network findings, and builds `process_scores` once. IOC rank by split inheritance is done here too (it had to change with the findings). Tests rewritten to findings.
 - **R2 Chains and IOC rank.** `storylines.py` builds chains (flagged trees, title finding, dropped-by, other activity). IOC rank uses split inheritance. `filters.py` returns the enrichability tag.
 - **R3 Web.** Queue and progress bar, Chains tab, IOCs reason column, Overview verdict, Stats tab. Remove Enrich next N, the warning dialog and the Skipped tab.
 - **R4 Cleanup.** Delete `main.py`, `report.py` and their tests; final pass on this file.
