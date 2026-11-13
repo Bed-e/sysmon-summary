@@ -13,7 +13,7 @@ from parse import WANTED_FIELDS, read_events
 from scoring.findings import find_findings
 from scoring.processes import build_process_scores
 from scoring.ranking import rank_iocs
-from storylines import build_chains, walk_tree
+from chains import build_chains, walk_tree
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLES = ["my-training-example.evtx", "day-in-life-events.evtx"]

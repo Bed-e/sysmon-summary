@@ -10,7 +10,7 @@ from starlette.datastructures import UploadFile
 
 import enrich
 from web import (config, enrich_jobs, limits, reasons, rows, runtime,
-                 storyline_summary, timeline_chart, timeline_data, upload)
+                 chain_summary, timeline_chart, timeline_data, upload)
 
 
 def ioc(kind, value, score=10, not_enrichable=""):
@@ -419,7 +419,7 @@ def process_entry(image, time="2023-12-14 03:42:00", **lists):
     return entry
 
 
-def test_summarize_storyline_and_caption():
+def test_summarize_chain_and_caption():
     hit = {"status": "enriched", "label": "malicious", "score_0_to_100": 90, "reasons": []}
     table = {
         "A": process_entry(r"C:\x\a.exe", ips=["1.2.3.4:443"], files=["f1", "f2"]),
@@ -431,10 +431,10 @@ def test_summarize_storyline_and_caption():
                                   "reason": "writes an autorun registry key (k)"}]},
               "A": {"image": r"C:\x\a.exe", "score": 0, "findings": []}}
     details = {("ip", "1.2.3.4"): {"score": 20, "reasons": [], "portal": hit}}
-    summary = storyline_summary.summarize_storyline(table, {"guids": ["A", "B"]}, scores, details)
+    summary = chain_summary.summarize_chain(table, {"guids": ["A", "B"]}, scores, details)
     assert summary["flagged"] == [{"name": "b.exe", "score": 40, "why": "sets an autorun registry key"}]
     assert summary["portal_hits"] == ["ip 1.2.3.4: portal 90 (malicious)"]
-    assert storyline_summary.summary_caption(summary) == (
+    assert chain_summary.summary_caption(summary) == (
         "2 processes · 1 flagged · 1 portal hit · 1 remote address · 1 DNS name · "
         "2 files · 1 registry write · 03:42–04:10")
 
@@ -537,13 +537,13 @@ def test_slice_choices_and_guids():
               "chains": [{"root": "P", "guids": ["P", "C"], "title_finding": title},
                          {"root": "Q", "guids": ["Q"], "title_finding": None}]}
     choices = timeline_data.slice_choices(chains)
-    assert list(choices) == ["flagged", "story:1", "story:2", "all"]
-    assert choices["story:1"] == ("Chain #1: child.exe — has a double extension "
+    assert list(choices) == ["flagged", "chain:1", "chain:2", "all"]
+    assert choices["chain:1"] == ("Chain #1: child.exe — has a double extension "
                                   "(.pdf.exe) (2 processes)")
     view = {"chains": chains, "process_scores": TL_SCORES}
-    assert timeline_data.slice_guids(view, "story:2") == {"Q"}
+    assert timeline_data.slice_guids(view, "chain:2") == {"Q"}
     assert timeline_data.slice_guids(view, "all") == set(table)
-    assert timeline_data.slice_guids(view, "story:99") == {"C", "P"}  # unknown -> flagged
+    assert timeline_data.slice_guids(view, "chain:99") == {"C", "P"}  # unknown -> flagged
     assert timeline_data.slice_guids(view, "nonsense") == {"C", "P"}
 
 
@@ -558,16 +558,16 @@ def test_chain_title_names_the_finding_not_the_root():
              "C": process_entry(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")}
     subject = {"guid": "C", "points": 20, "kind": "subject", "subject": ("ip", "1.2.3.4"),
                "reason": "connection from a program that rarely needs the network (x)"}
-    assert storyline_summary.chain_title(table, subject) == (
+    assert chain_summary.chain_title(table, subject) == (
         "powershell.exe → 1.2.3.4 — contacted by a program that rarely needs the network")
     burst = {"guid": "P", "points": 30, "kind": "process", "subject": None,
              "reason": "burst of discovery commands: 3 in 9 s (whoami, net)"}
-    assert storyline_summary.chain_title(table, burst) == (
+    assert chain_summary.chain_title(table, burst) == (
         "parent.exe — started a burst of discovery commands (whoami, net)")
-    assert storyline_summary.chain_title(table, None) == "nothing flagged"
+    assert chain_summary.chain_title(table, None) == "nothing flagged"
     by_hash = {"guid": "C", "points": 40, "kind": "subject", "subject": ("hash", "ab" * 32),
                "reason": "registry references this file's path (p)"}
-    assert storyline_summary.chain_title(table, by_hash) == (
+    assert chain_summary.chain_title(table, by_hash) == (
         "powershell.exe — an autorun key points to this file")
 
 
@@ -576,7 +576,7 @@ def test_ioc_details_reads_answers_and_tags():
                          ioc("dns", "a.example", 0)])
     state["results"] = [{"type": "ip", "value": "8.8.8.8", "status": "enriched",
                          "score_0_to_100": 90, "label": "malicious", "reasons": []}]
-    details = storyline_summary.ioc_details(state)
+    details = chain_summary.ioc_details(state)
     assert details[("ip", "8.8.8.8")]["portal"]["label"] == "malicious"
     assert details[("ip", "8.8.8.8")]["score"] == 30
     assert details[("dns", "x.local")]["portal"] == "not sent: internal name"

@@ -16,7 +16,7 @@ from iocs import collect_iocs
 from scoring.findings import find_findings
 from scoring.processes import build_process_scores
 from scoring.ranking import rank_iocs
-from storylines import build_chains
+from chains import build_chains
 from web.config import BUDGET_REASON, USAGE_PATH
 from web.limits import add_daily_count, read_daily_count, seconds_to_wait
 from web.runtime import LAST_HASH, QUEUE_LOCK

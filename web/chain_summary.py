@@ -11,7 +11,7 @@ from web.rows import answers_by_ioc, count_text, ioc_action
 def chain_title(table, finding):
     """Name a chain by what made it suspicious, not by its root process.
 
-    Input: table from storylines.build_chains; finding, the chain's
+    Input: table from chains.build_chains; finding, the chain's
     "title_finding" (or None).
     Output: text such as "leaked_video.mp4.exe — has a double extension"
     or "powershell.exe → 1.2.3.4 — contacted by a program that rarely needs
@@ -59,10 +59,10 @@ def ioc_details(state):
     return details
 
 
-def summarize_storyline(table, chain, process_scores, details):
+def summarize_chain(table, chain, process_scores, details):
     """Work out what is in one chain.
 
-    Input: table and chain from storylines.build_chains; process_scores
+    Input: table and chain from chains.build_chains; process_scores
     from scoring.build_process_scores; details from ioc_details.
     Output: {"processes": n, "flagged": [{name, score, why}] highest first,
     "ips": n, "dns": n, "files": n, "registry": n,
@@ -108,7 +108,7 @@ def summarize_storyline(table, chain, process_scores, details):
 def summary_caption(summary):
     """Build the one-line summary shown under a collapsed chain.
 
-    Input: summary from summarize_storyline.
+    Input: summary from summarize_chain.
     Output: text such as "9 processes · 2 flagged · 3 remote addresses ·
     1 DNS name · 120 files · 2 registry writes · 03:42–04:10". Zero counts
     (other than processes) are left out. Used by: build_chain_card.

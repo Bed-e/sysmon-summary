@@ -1,19 +1,19 @@
 """The soft verdict on the Overview tab (design.md section 8).
 
-Kept in its own module: it needs chain_title (storyline_summary) and
+Kept in its own module: it needs chain_title (chain_summary) and
 score_level (timeline_data), and timeline_data already imports
-storyline_summary, so putting it in either would make an import cycle.
+chain_summary, so putting it in either would make an import cycle.
 """
 
 from web.config import VERDICT_LABELS
-from web.storyline_summary import chain_title
+from web.chain_summary import chain_title
 from web.timeline_data import score_level
 
 
 def make_verdict(chains):
     """Work out the soft verdict for one dump from its chains.
 
-    Input: chains, state["chains"] from storylines.build_chains (the
+    Input: chains, state["chains"] from chains.build_chains (the
     chains are already sorted highest score first).
     Output: {"label", "level", "reason"}. level is score_level of the
     highest chain score ("normal" 0, "flagged" 1 to 39, "high" 40+), the

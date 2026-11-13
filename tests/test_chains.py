@@ -1,7 +1,7 @@
-"""Tests for storylines.py. Hand-made event lists only: no network, no
-.evtx file. Event dicts carry just the fields storylines.py reads."""
+"""Tests for chains.py. Hand-made event lists only: no network, no
+.evtx file. Event dicts carry just the fields chains.py reads."""
 
-from storylines import (
+from chains import (
     attach_activity,
     attach_iocs,
     build_chains,

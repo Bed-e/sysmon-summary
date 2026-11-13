@@ -21,7 +21,7 @@ NOT_ENRICHABLE_TEXT = {
     "ip_known_shared_range": "not sent: shared CDN or cloud address",
     "dns_internal": "not sent: internal name",
 }
-SHOW_STEP = 10  # rows (or storylines) shown at first, and added per "Show more"
+SHOW_STEP = 10  # rows (or chains) shown at first, and added per "Show more"
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 EVTX_MAGIC = b"ElfFile\x00"
 BUDGET_REASON = "daily VirusTotal budget reached"
@@ -78,7 +78,7 @@ SHORT_REASONS = [
     ("burst of discovery commands", "started a burst of discovery commands", True),
 ]
 
-# Portal labels that count as a "portal hit" in a storyline summary.
+# Portal labels that count as a "portal hit" in a chain summary.
 PORTAL_HIT_LABELS = ["malicious", "suspicious", "likely_malware", "definitely_malware"]
 
 # Timeline: one row per process, a bar for its lifetime, dots for events.
@@ -98,7 +98,7 @@ SCORE_BARS = [  # (score level, legend label, bar colour)
     ("flagged", "Process, score 1-%d" % (HIGH_SCORE - 1), "#f0a020"),
     ("high", "Process, score %d+" % HIGH_SCORE, "#d62020"),
 ]
-STORYLINE_CHOICES = 20  # storylines offered in the timeline dropdown
+CHAIN_CHOICES = 20  # chains offered in the timeline dropdown
 ROWS_VISIBLE = 40       # rows shown at once; more rows get a scroll slider
 ROW_HEIGHT = 24         # pixels per process row
 LABEL_WIDTH = 260       # pixels for the left-aligned process names

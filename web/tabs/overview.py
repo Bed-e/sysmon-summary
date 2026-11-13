@@ -6,8 +6,8 @@ from nicegui import ui
 
 from web.actions import show_chain
 from web.config import TOP_CHAINS
-from web.storyline_summary import (chain_title, ioc_details,
-    summarize_storyline, summary_caption)
+from web.chain_summary import (chain_title, ioc_details,
+    summarize_chain, summary_caption)
 from web.tabs.common import score_badge
 from web.verdict import make_verdict
 
@@ -43,8 +43,8 @@ def draw_top_chains(view, box):
             ui.label("No process tree had anything flagged.").classes("app-muted")
             return
         for number, chain in enumerate(chains["chains"][:TOP_CHAINS], 1):
-            summary = summarize_storyline(chains["table"], chain,
-                                          state["process_scores"], details)
+            summary = summarize_chain(chains["table"], chain,
+                                      state["process_scores"], details)
             with ui.row().classes("items-center gap-3 no-wrap w-full"):
                 score_badge(chain["score"])
                 with ui.column().classes("gap-0 grow"):

@@ -1,7 +1,8 @@
 """Step 2: collect unique IOCs (IPs, DNS names, file hashes) from events.
 
-Nothing is skipped or scored here. Skipping is filters.py (M2) and
-ranking is scoring/ (M2). This step only de-duplicates and counts.
+Nothing is tagged or scored here. The enrichability tag is filters.py
+(step 6) and scoring is scoring/ (steps 3, 4 and 6). This step only
+de-duplicates and counts.
 
 The result of collect_iocs looks like:
     {"ip":   {"8.8.8.8": record, ...},
@@ -34,7 +35,7 @@ def collect_iocs(events):
     - Event 22 (DNS query) gives a DNS name.
     - Event 1 (process created) gives one hash per file.
     - Every other event ID is ignored here (registry events stay in the
-      event list for M2 and M4).
+      event list for scoring/ and chains.py).
     """
     iocs = {
         "ip": {},
@@ -134,7 +135,7 @@ def ip_from_event(event):
 def normalize_ip(text):
     """Return the IPv4 address as a clean string, or None.
     IPv6 and garbage both give None. This does not check whether the address
-    is private; that is the filter's job (M2).
+    is private; that is the filter's job (filters.py, step 6).
     """
     try:
         address = ipaddress.ip_address(text.strip())
@@ -147,8 +148,8 @@ def normalize_ip(text):
 
 def normalize_dns(text):
     """Lowercase the name, strip spaces and one trailing dot.
-    Returns None if nothing is left. Internal names are kept here; skipping
-    them is the filter's job (M2).
+    Returns None if nothing is left. Internal names are kept here; tagging
+    them is the filter's job (filters.py, step 6).
     """
     name = text.strip().lower()
     if name.endswith("."):

@@ -12,7 +12,7 @@ def make_ioc_rows(ranked, results, table):
 
     Input: ranked (scoring.rank_iocs, in rank order); results, the portal
     answers so far (state["results"], copied by the caller); table, the
-    process table from storylines.build_chains (state["chains"]["table"]).
+    process table from chains.build_chains (state["chains"]["table"]).
     Output: a list of dicts {rank, type, value, score, why, full_why,
     seen_in, seen_in_full, portal, action, not_enrichable}, one per ranked
     IOC, in rank order. why is a list of short lines, one per process
@@ -46,7 +46,7 @@ def touched_by(item, table):
 
     Input: item, a ranked IOC (its record["process_guids"] comes from
     iocs.collect_iocs, in first-seen order); table, the process table from
-    storylines.build_chains, which holds every process, flagged or not.
+    chains.build_chains, which holds every process, flagged or not.
     Output: (short_text, full_text). short_text lists up to SEEN_IN_NAMES
     distinct image names in first-seen order, then "+N more" for the rest,
     for example "chrome.exe, svchost.exe +4 more". full_text has every
@@ -80,7 +80,7 @@ def ioc_action(item, portal):
     Output: "" when the IOC is never sent (not_enrichable) or already has a
     good answer, "Retry" after a "not_enriched" answer, "Look up" when it
     has not been asked about yet.
-    Used by: make_ioc_rows (IOCs tab) and storyline_summary.ioc_details
+    Used by: make_ioc_rows (IOCs tab) and chain_summary.ioc_details
     (chain cards), so both show the same button for the same IOC.
     """
     if item["not_enrichable"]:
@@ -98,7 +98,7 @@ def answers_by_ioc(results):
     Input: results, the portal answers so far (state["results"], copied by
     the caller).
     Output: {(type, value): common-shape dict}.
-    Used by: make_ioc_rows and web.storyline_summary.ioc_details.
+    Used by: make_ioc_rows and web.chain_summary.ioc_details.
     """
     answers = {}
     for result in results:

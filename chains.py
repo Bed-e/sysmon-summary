@@ -152,7 +152,7 @@ def link_children(table):
 
 
 def walk_tree(table, root_guid):
-    """List every GUID in one storyline, parent before children.
+    """List every GUID in one process tree, parent before children.
 
     Input: table with children linked; root_guid, one root from link_children.
     Output: a list of GUIDs in depth-first order. A visited set makes a
