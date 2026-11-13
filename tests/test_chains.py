@@ -8,6 +8,7 @@ from chains import (
     build_process_table,
     find_dropped_by,
     link_children,
+    other_reason_count,
     strongest_finding,
     walk_tree,
 )
@@ -155,6 +156,26 @@ def test_strongest_finding_is_highest_points_then_earliest():
     assert strongest_finding([D], process_scores) is None
 
 
+def test_strongest_finding_follows_the_highest_scoring_process():
+    # A (a browser) and B (malware) both write an autorun key (+40), but B
+    # also runs from Downloads, so B scores 60 and must name the chain even
+    # though A comes first in the tree.
+    process_scores = scores(A=[finding(A, 40, "autorun A")],
+                            B=[finding(B, 20, "user path"),
+                               finding(B, 40, "autorun B")])
+    assert strongest_finding([A, B], process_scores)["reason"] == "autorun B"
+
+
+def test_other_reason_count_counts_distinct_other_reasons():
+    process = {"findings": [finding(B, 40, "autorun"),
+                            finding(B, 20, "rare program", ("ip", "1.1.1.1")),
+                            finding(B, 20, "rare program", ("ip", "2.2.2.2")),
+                            finding(B, 0, "zero points")]}
+    assert other_reason_count(process, process["findings"][0]) == 1
+    assert other_reason_count(process, None) == 0
+    assert other_reason_count(None, process["findings"][0]) == 0
+
+
 def test_build_chains_keeps_only_flagged_trees_and_ranks_them():
     iocs = {"ip": {}, "dns": {}, "hash": {}}
     process_scores = scores(B=[finding(B, 50, "double extension")],
@@ -166,6 +187,7 @@ def test_build_chains_keeps_only_flagged_trees_and_ranks_them():
     assert chain["guids"] == [A, B, C]
     assert chain["flagged"] == [B, C]
     assert chain["title_finding"]["reason"] == "double extension"
+    assert chain["title_more"] == 0
     assert result["other"] == [D]
     assert result["events_without_guid"] == 0
 

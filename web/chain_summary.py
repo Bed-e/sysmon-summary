@@ -8,17 +8,22 @@ from web.reasons import portal_text, short_reason, short_why
 from web.rows import answers_by_ioc, count_text, ioc_action
 
 
-def chain_title(table, finding):
+def chain_title(table, finding, more=0):
     """Name a chain by what made it suspicious, not by its root process.
 
     Input: table from chains.build_chains; finding, the chain's
-    "title_finding" (or None).
+    "title_finding" (or None), which is the strongest finding of the
+    highest-scoring process in the tree (chains.strongest_finding); more,
+    the chain's "title_more" (chains.other_reason_count): how many other
+    reasons that same process has. It defaults to 0.
     Output: text such as "leaked_video.mp4.exe — has a double extension"
     or "powershell.exe → 1.2.3.4 — contacted by a program that rarely needs
-    the network". The process is the one the finding belongs to; the arrow
-    part appears only for an IP or DNS subject (a hash subject is the
-    process's own file, so its long value is left out).
-    Used by: build_chain_card (the card header) and timeline_data.slice_choices.
+    the network", with " (+N more)" added when more is above 0. The process
+    is the one the finding belongs to; the arrow part appears only for an
+    IP or DNS subject (a hash subject is the process's own file, so its long
+    value is left out).
+    Used by: build_chain_card (the card header), the Overview's top chains,
+    make_verdict (the verdict reason) and timeline_data.slice_choices.
     """
     if finding is None:
         return "nothing flagged"
@@ -27,7 +32,10 @@ def chain_title(table, finding):
     name = name or "unknown process"
     if finding["subject"] is not None and finding["subject"][0] != "hash":
         name = "%s → %s" % (name, finding["subject"][1])
-    return "%s — %s" % (name, short_reason(finding["reason"]))
+    title = "%s — %s" % (name, short_reason(finding["reason"]))
+    if more > 0:
+        title = "%s (+%d more)" % (title, more)
+    return title
 
 
 def ioc_details(state):

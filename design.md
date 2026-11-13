@@ -50,7 +50,7 @@ A **finding** is one local clue about one process:
  "kind": "process" | "subject", "subject": ("ip", "1.2.3.4") or None}
 ```
 
-- **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, and the **enumeration burst**. There is no minus for running from a system folder: living-off-the-land binaries (`rundll32`, `powershell`) doing bad things must not be discounted.
+- **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (the `\CurrentVersion\Run`, `RunOnce`, `RunOnceEx`, `RunServices` keys themselves, not look-alikes such as `RunNotification`; Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, and the **enumeration burst**. There is no minus for running from a system folder: living-off-the-land binaries (`rundll32`, `powershell`) doing bad things must not be discounted.
 - **Subject findings** are about one IOC the process touched, worked out per process:
   - IP: the connection comes from a program that rarely needs the network but that attackers use to download or call home (`powershell`, `cmd`, `mshta`, `rundll32`, `certutil`, `bitsadmin`, ...: `RARE_NETWORK_PROCESSES`), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing).
   - DNS: very long or high-entropy label, or a close lookalike of a well-known name.
@@ -63,14 +63,14 @@ Weights, thresholds and word lists are named constants in `scoring/config.py`. K
 ## 5. Chains (step 5)
 
 - A **flagged** process has a score above 0. A **chain** is one process tree (a root and everything it started) with at least one flagged process. Trees with nothing flagged go in a collapsed **Other activity** list.
-- **Title:** the strongest finding in the tree, its process and its subject, e.g. `invoice.pdf.exe → C2 to 1.2.3.4`. Not the root process. Other flagged branches are shown inside the same card.
+- **Title:** the highest-scoring process in the tree (earliest on a tie), its strongest finding and its subject, plus "(+N more)" when that process has other reasons, e.g. `invoice.pdf.exe → 1.2.3.4 — ... (+1 more)`. Not the root process, and not a bigger single finding in a lower-scoring process (a browser's own startup entry must not outname the malware that also set one). Other flagged branches are shown inside the same card.
 - **Shape:** flagged processes show their findings and activity. Unflagged ancestors and descendants are shown as plain lines with no detail, so the whole flow is visible.
 - **Rank:** the highest process score in the tree, then larger tree, then earliest start.
 - **Dropped by:** if a process's image path matches a file another process created (event 11), the chain shows "file written by chrome.exe at 10:02". Trees are not merged.
 - A root is a process whose parent is missing from the dump (it started before the capture). Its parent's image name is shown as a note.
 - Portal answers **mark** a chain (a badge on the IOC and a "portal hit" count on the card). They never change its score or rank.
 
-Output: `{"table": {guid: process entry}, "chains": [{root, score, title_finding, guids, flagged}], "other": [root guid, ...], "events_without_guid": n}`. Each process entry lists the IOCs it touched as `(type, value)` and its `dropped_by` writer.
+Output: `{"table": {guid: process entry}, "chains": [{root, score, title_finding, title_more, guids, flagged}], "other": [root guid, ...], "events_without_guid": n}`. Each process entry lists the IOCs it touched as `(type, value)` and its `dropped_by` writer.
 
 Chains are built **once** at upload. Portal answers are never stored in them: the page looks each IOC's answer up by `(type, value)` when it draws, so enrichment never rebuilds a chain.
 

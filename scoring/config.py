@@ -54,8 +54,15 @@ DOCUMENT_VIEWERS = ["winword", "excel", "powerpnt", "outlook", "acrord32",
                     "acrobat", "foxitreader"]
 SCRIPT_HOSTS = ["cmd", "powershell", "wscript", "cscript", "mshta"]
 
-# A registry key containing one of these is an autorun location.
-AUTORUN_MARKERS = ["\\currentversion\\run",
+# A registry key containing one of these is an autorun location. The Run
+# and RunOnce markers end in a backslash so they match only those keys
+# themselves: "\currentversion\run" alone would also match unrelated keys
+# such as RunNotification (toast settings, not an autorun).
+AUTORUN_MARKERS = ["\\currentversion\\run\\",
+                   "\\currentversion\\runonce\\",
+                   "\\currentversion\\runonceex\\",
+                   "\\currentversion\\runservices\\",
+                   "\\currentversion\\runservicesonce\\",
                    "\\windows nt\\currentversion\\winlogon\\shell",
                    "\\windows nt\\currentversion\\winlogon\\userinit"]
 

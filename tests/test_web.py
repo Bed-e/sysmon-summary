@@ -276,7 +276,7 @@ def test_make_verdict_bands():
     def chains(score):
         return {"table": table, "other": ["X", "Y"],
                 "chains": [{"root": "R", "score": score, "title_finding": finding,
-                            "guids": ["R"], "flagged": ["R"]}]}
+                            "title_more": 0, "guids": ["R"], "flagged": ["R"]}]}
     assert make_verdict({"table": {}, "chains": [], "other": ["X", "Y"]}) == {
         "label": "Likely safe", "level": "normal",
         "reason": "Nothing was flagged in 2 process trees."}
@@ -534,12 +534,14 @@ def test_slice_choices_and_guids():
     title = {"guid": "C", "points": 45, "reason": "double extension (.pdf.exe)",
              "kind": "process", "subject": None}
     chains = {"table": table,
-              "chains": [{"root": "P", "guids": ["P", "C"], "title_finding": title},
-                         {"root": "Q", "guids": ["Q"], "title_finding": None}]}
+              "chains": [{"root": "P", "guids": ["P", "C"], "title_finding": title,
+                          "title_more": 1},
+                         {"root": "Q", "guids": ["Q"], "title_finding": None,
+                          "title_more": 0}]}
     choices = timeline_data.slice_choices(chains)
     assert list(choices) == ["flagged", "chain:1", "chain:2", "all"]
     assert choices["chain:1"] == ("Chain #1: child.exe — has a double extension "
-                                  "(.pdf.exe) (2 processes)")
+                                  "(.pdf.exe) (+1 more) (2 processes)")
     view = {"chains": chains, "process_scores": TL_SCORES}
     assert timeline_data.slice_guids(view, "chain:2") == {"Q"}
     assert timeline_data.slice_guids(view, "all") == set(table)
@@ -564,6 +566,8 @@ def test_chain_title_names_the_finding_not_the_root():
              "reason": "burst of discovery commands: 3 in 9 s (whoami, net)"}
     assert chain_summary.chain_title(table, burst) == (
         "parent.exe — started a burst of discovery commands (whoami, net)")
+    assert chain_summary.chain_title(table, burst, 2) == (
+        "parent.exe — started a burst of discovery commands (whoami, net) (+2 more)")
     assert chain_summary.chain_title(table, None) == "nothing flagged"
     by_hash = {"guid": "C", "points": 40, "kind": "subject", "subject": ("hash", "ab" * 32),
                "reason": "registry references this file's path (p)"}

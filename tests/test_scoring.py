@@ -110,6 +110,15 @@ def test_registry_run_key_write_fires():
     assert points(registry_persistence_signal(event)) == [WEIGHT_REGISTRY_AUTORUN]
 
 
+def test_registry_runonce_fires_but_run_notification_does_not():
+    once = make_event(13, EventType="SetValue",
+                      TargetObject="HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce\\Setup")
+    toast = make_event(13, EventType="SetValue",
+                       TargetObject="HKU\\x\\Software\\Microsoft\\Windows\\CurrentVersion\\RunNotification\\StartupTNotiX")
+    assert points(registry_persistence_signal(once)) == [WEIGHT_REGISTRY_AUTORUN]
+    assert registry_persistence_signal(toast) == []
+
+
 def test_registry_other_key_and_delete_do_not_fire():
     other = make_event(13, EventType="SetValue", TargetObject="HKLM\\Software\\Vendor\\Setting")
     deleted = make_event(12, EventType="DeleteKey",
