@@ -1,22 +1,21 @@
-"""M5: the web app (NiceGUI), with tabs.
+"""The web app (NiceGUI), with tabs.
 
 Run from the project folder:
 
     python -m web.app
 
 Open http://127.0.0.1:5000. Upload a Sysmon .evtx dump: it is parsed,
-filtered and ranked locally and the report is shown in five tabs:
-Overview, IOCs, Storylines, Timeline and Skipped. NO portal is called until
-the analyst presses "Enrich next N" or a row's Look up button. Then ONE
-background thread looks up those IOCs, one at a time, highest rank first
-(the same sequential loop as M3). "Next N" means the N highest-ranked IOCs
-not tried yet, so pressing it twice with N=5 covers ranks 1-5, then 6-10.
-A timer on the page updates the table and status in place as answers
-arrive (no page reload).
+its attack chains are built and its IOCs ranked locally, and the report is
+shown in five tabs: Overview, Chains, IOCs, Timeline and Stats. NO portal is
+called until the analyst presses a Look up / Retry button or "Enrich this
+chain". Each press adds IOCs to one FIFO queue per upload, and ONE
+background thread looks them up, one at a time. A timer on the page updates
+the progress bar, the table and the chains in place as answers arrive (no
+page reload).
 
 Rules kept here (design.md section 7):
-- The browser never sends an IOC value back. It sends only N or a row's
-  rank number, so the server only ever looks up IOCs it ranked itself.
+- The browser never sends an IOC value back. It sends only a row's rank or
+  a chain's number, so the server only ever looks up IOCs it collected.
 - Only hash lookups reach VirusTotal, so only they are counted and paced.
   The limits come from data/api_limits.txt; today's count is kept in
   data/hash_usage.txt so a restart does not reset it.

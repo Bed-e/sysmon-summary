@@ -3,36 +3,28 @@
 
 from nicegui import ui
 
-from web.actions import lookup_one
 from web.config import IOC_GRID_COLUMNS, IOC_HEADERS
 from web.rows import make_ioc_rows
-from web.tabs.common import build_show_more, score_badge
-
-
-def lookup_handler(view, rank):
-    """Return a no-argument click handler that looks up one row.
-
-    Input: view; rank, the row's 1-based rank (a number the server made).
-    Output: a function for a button's on_click. A separate function is used
-    so each button keeps its own rank. Used by: build_ioc_rows.
-    """
-    def click():
-        lookup_one(view, rank)
-    return click
+from web.tabs.common import build_show_more, lookup_handler, score_badge
 
 
 def build_ioc_rows(container, view, limit):
     """Draw the first `limit` rows of the IOC table as a plain grid.
 
     Input: container, the column that holds the grid (cleared first); view
-    (reads state); limit, from build_show_more.
+    (reads state, including state["chains"]["table"] for process names);
+    limit, from build_show_more.
     Output: draws a header row and one row per IOC: rank, type, value, local
-    score, the short "why" (full reasons on hover), the portal answer and,
-    when there is no answer yet or it failed, a Look up / Retry button.
+    score, the "why" as one line per process (full reasons on hover), the
+    processes that touched it (every name and count on hover), the portal
+    answer and, when there is no answer yet or it failed, a Look up / Retry
+    button. A not-enrichable IOC shows its reason, muted, instead of a
+    button.
     Used by: build_ioc_tab (through build_show_more) and refresh_view.
     """
     state = view["state"]
-    rows = make_ioc_rows(state["ranked"], list(state["results"]))
+    rows = make_ioc_rows(state["ranked"], list(state["results"]),
+                         state["chains"]["table"])
     container.clear()
     with container:
         with ui.grid().classes("w-full items-center text-sm") \
@@ -45,10 +37,17 @@ def build_ioc_rows(container, view, limit):
                 ui.label(row["value"]).classes("ioc-cell break-all")
                 with ui.element("div").classes("ioc-cell"):
                     score_badge(row["score"])
-                with ui.label(row["why"]).classes("ioc-cell"):
-                    ui.tooltip(row["full_why"]).classes("whitespace-pre-line text-sm")
+                with ui.column().classes("ioc-cell gap-0"):
+                    for line in row["why"] or ["nothing flagged"]:
+                        ui.label(line)
+                    ui.tooltip(row["full_why"] or "no reasons") \
+                        .classes("whitespace-pre-line text-sm")
+                with ui.label(row["seen_in"]).classes("ioc-cell break-all"):
+                    ui.tooltip(row["seen_in_full"]).classes("whitespace-pre-line text-sm")
                 with ui.row().classes("ioc-cell items-center gap-2"):
-                    ui.label(row["portal"])
+                    portal = ui.label(row["portal"])
+                    if row["not_enrichable"]:
+                        portal.classes("app-muted")
                     if row["action"]:
                         ui.button(row["action"], on_click=lookup_handler(view, row["rank"])) \
                             .props("dense unelevated no-caps size=sm color=primary")
@@ -63,8 +62,8 @@ def build_ioc_tab(view):
     state = view["state"]
     with ui.column().classes("app-card"):
         ui.label("Ranked IOCs").classes("app-title")
-        ui.label("Hover over a \"why\" to see the full reasons.") \
-            .classes("app-muted")
+        ui.label("Each line of a \"why\" is one process. Hover for the full "
+                 "reasons or every process.").classes("app-muted")
         container = ui.column().classes("w-full overflow-x-auto")
 
         def draw(limit):

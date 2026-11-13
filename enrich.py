@@ -243,7 +243,7 @@ def enrich_one(item, urls):
     is not JSON. An item tagged not_enrichable (private IP, shared range,
     internal DNS name) is answered "not sent: <reason code>" without any
     call: the privacy check right before every lookup.
-    Used by: web.enrich_jobs.run_enrichment.
+    Used by: web.enrich_jobs.lookup_item.
     """
     if item.get("not_enrichable"):
         return not_enriched(item, "not sent: %s" % item["not_enrichable"])

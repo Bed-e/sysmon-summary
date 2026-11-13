@@ -415,6 +415,10 @@ def test_ioc_inherits_process_findings_of_the_strongest_process_only():
     assert ranked[0]["score"] == (WEIGHT_UNUSUAL_PORT
                                   + WEIGHT_USER_WRITABLE_PATH + WEIGHT_ODD_PARENT)
     assert any("process evil.exe:" in reason for reason in ranked[0]["reasons"])
+    # the subject reason names the first process it was found in ({OK})
+    port = [r for r in ranked[0]["reasons"] if "unusual destination port" in r]
+    assert len(port) == 1 and port[0].startswith("+%d process svchost.exe: unusual"
+                                                 % WEIGHT_UNUSUAL_PORT)
 
 
 def test_process_score_counts_a_repeated_reason_once():

@@ -8,8 +8,10 @@ pages share.
 import threading
 
 # Shared state (design.md section 7): upload id -> state dict. Only the
-# enrich thread writes "results", "run" and "error"; pages only read them.
+# enrich thread writes "results"; pages only read them.
 UPLOADS = {}
-# Time of the last hash lookup, so pacing also holds across two runs.
+# Time of the last hash lookup, so pacing also holds across two uploads.
 LAST_HASH = {"time": 0.0}
-START_LOCK = threading.Lock()
+# Held while a state's queue fields are read and changed together
+# (web.enrich_jobs: add_to_queue, drain_queue, start_worker).
+QUEUE_LOCK = threading.Lock()

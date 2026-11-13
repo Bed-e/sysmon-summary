@@ -1,60 +1,78 @@
-"""The Overview tab: counts, status and the Enrich next N controls.
+"""The Overview tab: the soft verdict and its reason, then the top chains
+(design.md section 8). The counts are on the Stats tab.
 """
 
 from nicegui import ui
 
-from web.actions import ask_enrich
-from web.config import NOT_A_VERDICT, N_CHOICES
-from web.enrich_jobs import status_text
-from web.rows import make_counts_rows
+from web.actions import show_chain
+from web.config import TOP_CHAINS
+from web.storyline_summary import (chain_title, ioc_details,
+    summarize_storyline, summary_caption)
+from web.tabs.common import score_badge
+from web.verdict import make_verdict
 
 
-def draw_count_tiles(box, rows):
-    """Draw the counts as a grid of tiles (a big number with a label).
+def show_chain_handler(view, number):
+    """Return a no-argument click handler for one Show in Chains button.
+    A separate function so each button keeps its own number.
+    Used by: draw_top_chains."""
+    def click():
+        show_chain(view, number)
+    return click
 
-    Input: box, the NiceGUI container that holds the tiles; rows, the list
-    of {item, value} from make_counts_rows (web/rows.py). An item such as
-    "IOCs found (8 IPs, 33 DNS names, 97 hashes)" is split at " (": the
-    first part is the tile's title, the rest a small caption.
-    Output: nothing. Clears the box and draws one tile per row, as labels
-    only (text is never raw HTML).
-    Used by: build_overview_tab (first draw) and refresh_view, through
-    view["draw_counts"], on every timer tick while a run is going.
+
+def draw_top_chains(view, box):
+    """Draw the top chains under the verdict.
+
+    Input: view (reads "state": chains, process_scores, ranked, results);
+    box, the column that holds the list (cleared first).
+    Output: one line per chain for the first TOP_CHAINS chains: score
+    badge, "#n · title" (chain_title), the one-line summary_caption (with
+    the current portal hit count) and a Show in Chains button. When there
+    are no chains, a muted line says so.
+    Used by: build_overview_tab, on the first draw and through
+    view["redraw_overview"] when portal answers change.
     """
+    state = view["state"]
+    chains = state["chains"]
+    details = ioc_details(state)
     box.clear()
     with box:
-        for row in rows:
-            title, _, caption = row["item"].partition(" (")
-            with ui.column().classes("count-tile"):
-                ui.label(row["value"]).classes("count-value")
-                ui.label(title).classes("count-title")
-                if caption:
-                    ui.label("(" + caption).classes("app-muted")
+        ui.label("Top chains").classes("app-title")
+        if not chains["chains"]:
+            ui.label("No process tree had anything flagged.").classes("app-muted")
+            return
+        for number, chain in enumerate(chains["chains"][:TOP_CHAINS], 1):
+            summary = summarize_storyline(chains["table"], chain,
+                                          state["process_scores"], details)
+            with ui.row().classes("items-center gap-3 no-wrap w-full"):
+                score_badge(chain["score"])
+                with ui.column().classes("gap-0 grow"):
+                    ui.label("#%d  ·  %s" % (number, chain_title(
+                        chains["table"], chain["title_finding"]))).classes("font-bold")
+                    ui.label(summary_caption(summary)).classes("app-muted")
+                ui.button("Show in Chains", on_click=show_chain_handler(view, number)) \
+                    .props("dense flat no-caps color=primary")
 
 
 def build_overview_tab(view):
-    """Draw the Overview tab: note, count tiles, and the enrich controls.
+    """Draw the Overview tab: the verdict card, then the top chains.
 
-    Input: view, the page's dict of live parts (see report_page). This
-    function stores "draw_counts", "status" and "button" in it for
-    refresh_view.
-    Output: draws the tab. The N dropdown and button call ask_enrich.
+    Input: view, the page's dict of live parts (see report_page); reads
+    view["state"]["chains"]. Stores "redraw_overview" for refresh_view.
+    Output: draws a card with the soft verdict (make_verdict: a coloured
+    label in the score-badge colours and its one-line reason) and a muted
+    note that portal answers never change it, then the top chains
+    (draw_top_chains).
     Used by: report_page.
     """
-    state = view["state"]
-    ui.label(NOT_A_VERDICT).classes("app-notice")
-    tiles = ui.element("div").classes("count-grid")
-    view["draw_counts"] = lambda rows: draw_count_tiles(tiles, rows)
-    draw_count_tiles(tiles, make_counts_rows(state, state["results"]))
-    with ui.column().classes("app-card"):
-        ui.label("Enrich on demand").classes("app-title")
-        ui.label("Each press sends the next N highest-ranked IOCs that have "
-                 "not been tried yet, one at a time. Single IOCs can be "
-                 "looked up from the IOCs tab.").classes("app-muted")
-        with ui.row().classes("items-center"):
-            choice = ui.select(N_CHOICES, value="5", label="N").classes("w-32")
-            view["button"] = ui.button(
-                "Enrich next N",
-                on_click=lambda: ask_enrich(view, choice.value))
-        view["status"] = ui.label(status_text(state))
-    view["button"].set_enabled(state["run"] != "running")
+    verdict = make_verdict(view["state"]["chains"])
+    with ui.column().classes("app-card gap-2"):
+        ui.label(verdict["label"]).classes(
+            "app-badge app-badge-%s verdict-label" % verdict["level"])
+        ui.label(verdict["reason"])
+        ui.label("Local evidence only. Portal answers are shown but never "
+                 "change this.").classes("app-muted")
+    box = ui.column().classes("app-card w-full gap-3")
+    view["redraw_overview"] = lambda: draw_top_chains(view, box)
+    draw_top_chains(view, box)

@@ -94,9 +94,11 @@ body.body--dark .app-badge-high { background: #5c1f1a; color: #ffb4ab; }
   border-bottom: 2px solid var(--app-border); }
 .ioc-cell { padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--app-border); }
 .app-section { font-weight: 700; margin-top: 0.5rem; }
-.storyline { padding: 0.25rem 0.75rem; }
-.process-node .q-expansion-item__content { border-left: 2px solid var(--app-border);
-  margin-left: 0.5rem; padding-left: 0.75rem; }
+.chain-card { padding: 0.25rem 0.75rem; }
+.verdict-label { font-size: 1.35rem; padding: 0.3rem 0.9rem; border-radius: 8px; }
+.chain-node { border-left: 3px solid var(--app-border); padding: 0.25rem 0 0.25rem 0.75rem;
+  margin: 0.25rem 0; gap: 0.15rem; }
+.chain-plain { color: var(--app-muted); font-size: 0.85rem; }
 .process-cmd { font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem;
   word-break: break-all; }
 .app-notice { background: var(--app-warn-bg); border-left: 4px solid var(--app-warn-border);

@@ -21,8 +21,9 @@ def ioc(kind, value, score=10, not_enrichable=""):
 
 def fresh_state(ranked):
     return {"name": "x.evtx", "events": [], "iocs": {"ip": {}, "dns": {}, "hash": {}},
-            "ranked": ranked, "results": [], "run": "idle",
-            "error": "", "run_size": 0, "run_done": 0, "version": 0}
+            "ranked": ranked, "results": [], "version": 0,
+            "queue": [], "queued": set(), "queue_done": 0, "queue_total": 0,
+            "worker": "idle", "error": ""}
 
 
 def fake_portal(monkeypatch, calls):
@@ -53,33 +54,80 @@ def test_daily_count_persists_and_resets_on_new_day(tmp_path):
     assert limits.read_daily_count(p, "2026-01-02") == 0
 
 
-def test_needs_warning():
-    ranked = [ioc("hash", "a" * 64) for _ in range(6)] + [ioc("ip", "8.8.8.8")]
-    assert limits.needs_warning(ranked[:3], LIMITS, 0) == []
-    assert "6 hash lookups" in limits.needs_warning(ranked, LIMITS, 0)[0]
-    assert "Daily budget" in limits.needs_warning(ranked, LIMITS, 499)[-1]
-    assert limits.needs_warning([ioc("ip", "1.1.1.1")], LIMITS, 999) == []
-
-
 def test_seconds_to_wait():
     assert limits.seconds_to_wait(100.0, 110.0, 15.0) == 5.0
     assert limits.seconds_to_wait(100.0, 200.0, 15.0) == 0
 
 
-def test_run_enrichment_only_given_items_in_order_and_paces_hashes(monkeypatch, tmp_path):
+def drain(state, usage, limits=LIMITS, pauses=None, clock=lambda: 1000.0):
+    """Run the queue loop in this thread (no real thread, no real waiting)."""
+    state["worker"] = "running"
+    enrich_jobs.drain_queue(state, URLS, limits, usage,
+                            pause=(pauses.append if pauses is not None else lambda s: None),
+                            clock=clock)
+
+
+def test_queue_is_fifo_and_paces_hashes(monkeypatch, tmp_path):
     calls, pauses = [], []
     fake_portal(monkeypatch, calls)
     monkeypatch.setitem(runtime.LAST_HASH, "time", 0.0)
     ranked = [ioc("hash", "a" * 64), ioc("ip", "8.8.8.8"), ioc("hash", "b" * 64),
               ioc("dns", "never.example")]
     state = fresh_state(ranked)
-    enrich_jobs.run_enrichment(state, ranked[:3], URLS, LIMITS, str(tmp_path / "u.txt"),
-                       pause=pauses.append, clock=lambda: 1000.0)
-    assert state["run"] == "done" and state["run_done"] == 3 and state["version"] == 3
-    assert [r["value"] for r in state["results"]] == ["a" * 64, "8.8.8.8", "b" * 64]
+    assert enrich_jobs.add_to_queue(state, [ranked[2], ranked[0], ranked[1]]) == 3
+    drain(state, str(tmp_path / "u.txt"), pauses=pauses)
+    assert state["worker"] == "idle" and state["queue"] == [] and state["queued"] == set()
+    assert state["queue_done"] == 3 and state["queue_total"] == 3 and state["version"] == 3
+    assert [r["value"] for r in state["results"]] == ["b" * 64, "a" * 64, "8.8.8.8"]
     assert len(calls) == 3 and not any("never" in c for c in calls)
     assert pauses == [15.0]  # second hash waits the full spacing; first is free
     assert limits.read_daily_count(str(tmp_path / "u.txt")) == 2
+
+
+def test_add_to_queue_skips_queued_answered_and_not_enrichable():
+    ranked = [ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9"),
+              ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")]
+    state = fresh_state(ranked)
+    state["results"] = [{"type": "ip", "value": "9.9.9.9", "status": "enriched"}]
+    assert enrich_jobs.add_to_queue(state, ranked) == 1
+    assert enrich_jobs.add_to_queue(state, ranked) == 0  # 8.8.8.8 is already waiting
+    assert [i["value"] for i in state["queue"]] == ["8.8.8.8"]
+    assert state["queue_total"] == 1
+
+
+def test_retry_replaces_a_failed_answer(monkeypatch, tmp_path):
+    calls = []
+    fake_portal(monkeypatch, calls)
+    state = fresh_state([ioc("ip", "8.8.8.8")])
+    enrich_jobs.store_result(state, enrich.not_enriched(state["ranked"][0], "timed out"))
+    assert enrich_jobs.add_to_queue(state, state["ranked"]) == 0  # answered, no retry
+    assert enrich_jobs.add_to_queue(state, state["ranked"], retry=True) == 1
+    drain(state, str(tmp_path / "u.txt"))
+    assert len(state["results"]) == 1 and state["results"][0]["status"] == "enriched"
+
+
+def test_progress_counts_restart_only_when_idle():
+    state = fresh_state([ioc("ip", "1.1.1.%d" % i) for i in range(1, 5)])
+    state.update(queue_done=7, queue_total=7)
+    enrich_jobs.add_to_queue(state, state["ranked"][:1])
+    assert (state["queue_done"], state["queue_total"]) == (0, 1)  # new batch
+    state["worker"] = "running"
+    enrich_jobs.add_to_queue(state, state["ranked"][1:])
+    assert (state["queue_done"], state["queue_total"]) == (0, 4)  # added to the batch
+
+
+def test_items_added_while_draining_are_looked_up(monkeypatch, tmp_path):
+    state = fresh_state([ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9")])
+
+    def fake(item, urls):
+        if item["value"] == "8.8.8.8":
+            enrich_jobs.add_to_queue(state, state["ranked"][1:])  # a press mid-run
+        return {"type": "ip", "value": item["value"], "status": "enriched"}
+    monkeypatch.setattr(enrich_jobs, "enrich_one", fake)
+    enrich_jobs.add_to_queue(state, state["ranked"][:1])
+    drain(state, str(tmp_path / "u.txt"))
+    assert [r["value"] for r in state["results"]] == ["8.8.8.8", "9.9.9.9"]
+    assert state["queue_done"] == 2 and state["queue_total"] == 2
 
 
 def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
@@ -88,47 +136,62 @@ def test_daily_budget_is_a_hard_stop(monkeypatch, tmp_path):
     usage = str(tmp_path / "u.txt")
     limits.add_daily_count(usage)
     state = fresh_state([ioc("hash", "a" * 64), ioc("ip", "8.8.8.8")])
-    enrich_jobs.run_enrichment(state, state["ranked"], URLS, {"hash_per_minute": 4, "hash_per_day": 1},
-                       usage, pause=lambda s: None, clock=lambda: 1.0)
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    drain(state, usage, {"hash_per_minute": 4, "hash_per_day": 1})
     first, second = state["results"]
     assert first["status"] == "not_enriched" and config.BUDGET_REASON in first["reasons"][0]
     assert second["status"] == "enriched"
     assert len(calls) == 1  # only the IP reached a portal
 
 
-def test_thread_crash_sets_failed(monkeypatch, tmp_path):
+def test_thread_crash_sets_failed_and_empties_queue(monkeypatch, tmp_path):
     def boom(item, urls):
         raise RuntimeError("kaboom")
     monkeypatch.setattr(enrich_jobs, "enrich_one", boom)
-    state = fresh_state([ioc("ip", "8.8.8.8")])
-    enrich_jobs.run_enrichment(state, state["ranked"], URLS, LIMITS, str(tmp_path / "u.txt"))
-    assert state["run"] == "failed" and "kaboom" in state["error"]
+    state = fresh_state([ioc("ip", "8.8.8.8"), ioc("ip", "9.9.9.9")])
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    drain(state, str(tmp_path / "u.txt"))
+    assert state["worker"] == "failed" and "kaboom" in state["error"]
+    assert state["queue"] == [] and state["queued"] == set()
+    assert enrich_jobs.add_to_queue(state, state["ranked"]) == 2  # can press again
 
 
-def test_start_refused_while_running():
+def test_start_worker_refused_while_running_or_empty():
     state = fresh_state([ioc("ip", "8.8.8.8")])
-    state["run"] = "running"
-    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is False
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is False  # empty queue
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    state["worker"] = "running"
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is False
     assert state["results"] == []
 
 
-def test_start_runs_thread_to_done(monkeypatch, tmp_path):
+def test_start_worker_runs_thread_to_idle(monkeypatch):
     calls = []
     fake_portal(monkeypatch, calls)
     state = fresh_state([ioc("ip", "8.8.8.8")])
     state["results"] = [{"type": "dns", "value": "kept.example", "status": "enriched"}]
-    assert enrich_jobs.start_enrichment(state, state["ranked"], URLS, LIMITS) is True
+    enrich_jobs.add_to_queue(state, state["ranked"])
+    assert enrich_jobs.start_worker(state, URLS, LIMITS) is True
     for t in threading.enumerate():
         if t is not threading.current_thread() and t.daemon:
             t.join(5)
-    assert state["run"] == "done" and len(state["results"]) == 2  # earlier kept
+    assert state["worker"] == "idle" and len(state["results"]) == 2  # earlier kept
 
 
-def test_choose_n():
-    ranked = [ioc("ip", "1.1.1.1")] * 3
-    assert rows.choose_n("10", ranked) == 3
-    assert rows.choose_n("all", ranked) == 3
-    assert rows.choose_n("5; drop", ranked) is None
+def test_chain_items_takes_flagged_processes_iocs_in_rank_order():
+    ranked = [ioc("ip", "8.8.8.8"), ioc("dns", "a.example"), ioc("ip", "9.9.9.9"),
+              ioc("hash", "c" * 64)]
+    state = fresh_state(ranked)
+    state["chains"] = {
+        "table": {"R": {"iocs": [("dns", "a.example")]},
+                  "F": {"iocs": [("ip", "9.9.9.9"), ("ip", "8.8.8.8")]},
+                  "G": {"iocs": [("hash", "c" * 64)]}},
+        "chains": [{"root": "R", "guids": ["R", "F", "G"], "flagged": ["F", "G"]}],
+    }
+    shown = [i["value"] for i in enrich_jobs.chain_items(state, 1)]
+    assert shown == ["8.8.8.8", "9.9.9.9", "c" * 64]  # a.example: root is not flagged
+    assert enrich_jobs.chain_items(state, 2) == []
+    assert enrich_jobs.chain_items(state, "1") == []
 
 
 def test_portal_text_never_shows_a_failure_as_a_score():
@@ -143,53 +206,98 @@ def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
     ranked = [ioc("ip", "1.1.1.1", 30), ioc("dns", "a.example", 20)]
     answer = {"type": "dns", "value": "a.example", "status": "enriched",
               "score_0_to_100": 10, "label": "likely_safe", "reasons": []}
-    shown = rows.make_ioc_rows(ranked, [answer])
+    ranked[0]["record"]["process_guids"] = ["A"]
+    table = {"A": {"image": r"C:\x\a.exe"}}
+    shown = rows.make_ioc_rows(ranked, [answer], table)
     assert [r["rank"] for r in shown] == [1, 2]
     assert shown[0]["portal"] == "not requested"
     assert shown[1]["portal"] == "portal 10 (likely_safe)"
-    assert shown[0]["why"] == "t" and shown[0]["full_why"] == "+30 t"
+    assert shown[0]["why"] == ["t"] and shown[0]["full_why"] == "+30 t"
+    assert shown[0]["seen_in"] == "a.exe" and shown[1]["seen_in"] == ""
     assert shown[0]["action"] == "Look up" and shown[1]["action"] == ""
+    assert shown[0]["not_enrichable"] is False
     failed = enrich.not_enriched(ranked[0], "timed out")
-    assert rows.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
+    assert rows.make_ioc_rows(ranked, [failed], table)[0]["action"] == "Retry"
 
 
 def test_not_enrichable_row_shows_reason_and_no_button():
-    shown = rows.make_ioc_rows([ioc("dns", "dc1.corp", 30, "dns_internal")], [])
+    shown = rows.make_ioc_rows([ioc("dns", "dc1.corp", 30, "dns_internal")], [], {})
     assert shown[0]["portal"] == "not sent: internal name"
-    assert shown[0]["action"] == ""
+    assert shown[0]["action"] == "" and shown[0]["not_enrichable"] is True
 
 
-def test_make_skipped_rows_sorted():
-    ranked = [ioc("dns", "b.local", not_enrichable="dns_internal"),
-              ioc("ip", "8.8.8.8"),
-              ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")]
-    shown = rows.make_skipped_rows(ranked)
-    assert [r["value"] for r in shown] == ["b.local", "10.0.0.1"]
-    assert shown[0]["reason"] == "not sent: internal name" and shown[0]["count"] == 1
-
-
-def test_counts_and_status():
-    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"),
+def test_lookup_stats():
+    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"), ioc("ip", "3.3.3.3"),
                          ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")])
-    state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}, "10.0.0.1": {}},
-                     "dns": {}, "hash": {}}
     ok = {"status": "enriched"}
+    part = {"status": "partial"}
     bad = {"status": "not_enriched"}
-    shown = {r["item"]: r["value"] for r in rows.make_counts_rows(state, [ok, bad])}
-    assert shown["Looked up on the portals"] == "1"
-    assert shown["Lookup failed (not enriched)"] == "1"
-    assert shown["Not requested"] == "0"
-    assert shown["Not enrichable (never sent anywhere)"] == "1"
-    assert shown["Enrichable"] == "2"
-    assert enrich_jobs.status_text(state) == "No portal has been called yet."
-    state.update(run="running", run_size=5, run_done=1)
-    state["results"] = [ok]
-    assert enrich_jobs.status_text(state) == "Running: 1 of 5 done."
-    state.update(run="done")
-    assert enrich_jobs.status_text(state) == ("Last run finished: 1 looked up. "
-                                      "1 of 2 enrichable IOCs tried so far.")
-    state.update(run="failed", error="boom")
-    assert enrich_jobs.status_text(state).startswith("Run failed: boom.")
+    shown = {r["item"]: r["value"] for r in rows.lookup_stats(state, [ok, part, bad])}
+    assert shown == {"Looked up on the portals": "2", "Lookup failed (not enriched)": "1",
+                     "Not requested": "0"}
+    shown = {r["item"]: r["value"] for r in rows.lookup_stats(state, [])}
+    assert shown["Not requested"] == "3"
+
+
+def test_ioc_stats_counts_each_not_enrichable_reason():
+    state = fresh_state([ioc("ip", "8.8.8.8"),
+                         ioc("ip", "10.0.0.1", not_enrichable="ip_not_public"),
+                         ioc("ip", "10.0.0.2", not_enrichable="ip_not_public"),
+                         ioc("dns", "dc1.corp", not_enrichable="dns_internal")])
+    state["iocs"] = {"ip": {"8.8.8.8": {}, "10.0.0.1": {}, "10.0.0.2": {}},
+                     "dns": {"dc1.corp": {}}, "hash": {}}
+    shown = [(r["item"], r["value"]) for r in rows.ioc_stats(state)]
+    assert shown == [("IOCs found (3 IPs, 1 DNS names, 0 hashes)", "4"),
+                     ("Enrichable", "1"),
+                     ("Not sent: internal name", "1"),
+                     ("Not sent: private or reserved address", "2")]
+
+
+def test_event_stats_kept_dropped_errors_and_no_guid():
+    state = fresh_state([])
+    state["events"] = [{"event_id": 3}, {"event_id": 1}, {"event_id": 3}]
+    state["parse"] = {"dropped_counts": {7: 5, 5: 1}, "error_count": 2, "total": 11}
+    state["chains"] = {"events_without_guid": 4}
+    shown = [(r["item"], r["value"]) for r in rows.event_stats(state)]
+    assert shown == [("Events in the file", "11"), ("Events kept", "3"),
+                     ("Kept: ID 1 (process start)", "1"),
+                     ("Kept: ID 3 (network connection)", "2"),
+                     ("Dropped: ID 5", "1"), ("Dropped: ID 7", "5"),
+                     ("Parse errors", "2"),
+                     ("Events with no ProcessGuid (not in any chain)", "4")]
+
+
+def test_make_verdict_bands():
+    from web.verdict import make_verdict
+    table = {"R": {"image": r"C:\x\a.exe"}}
+    finding = {"guid": "R", "points": 20, "kind": "process", "subject": None,
+               "reason": "double extension (.pdf.exe)"}
+
+    def chains(score):
+        return {"table": table, "other": ["X", "Y"],
+                "chains": [{"root": "R", "score": score, "title_finding": finding,
+                            "guids": ["R"], "flagged": ["R"]}]}
+    assert make_verdict({"table": {}, "chains": [], "other": ["X", "Y"]}) == {
+        "label": "Likely safe", "level": "normal",
+        "reason": "Nothing was flagged in 2 process trees."}
+    assert make_verdict(chains(1))["label"] == "Suspicious"
+    assert make_verdict(chains(config.HIGH_SCORE - 1))["label"] == "Suspicious"
+    top = make_verdict(chains(config.HIGH_SCORE))
+    assert top["label"] == "Likely compromised" and top["level"] == "high"
+    assert top["reason"] == ("Strongest chain: #1 a.exe — has a double extension "
+                             "(.pdf.exe), score %d." % config.HIGH_SCORE)
+
+
+def test_progress_text_and_value():
+    state = fresh_state([])
+    assert enrich_jobs.progress_text(state) == "" and enrich_jobs.progress_value(state) == 0.0
+    state.update(worker="running", queue_done=1, queue_total=4)
+    assert enrich_jobs.progress_text(state) == "Looking up: 1 of 4 done."
+    assert enrich_jobs.progress_value(state) == 0.25
+    state.update(worker="idle", queue_done=4)
+    assert enrich_jobs.progress_text(state) == "Done: 4 looked up."
+    state.update(worker="failed", error="boom")
+    assert enrich_jobs.progress_text(state).startswith("Lookups stopped: boom.")
 
 
 def post(name, data):
@@ -218,20 +326,9 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
     location = response.headers["location"]
     assert location.startswith("/report/")
     state = runtime.UPLOADS[location.rsplit("/", 1)[1]]
-    assert state["name"] == "evil name.evtx" and state["run"] == "idle"
+    assert state["name"] == "evil name.evtx" and state["worker"] == "idle"
+    assert state["parse"] == {"dropped_counts": {}, "error_count": 0, "total": 0}
     assert state["results"] == [] and list(tmp_path.iterdir()) == []
-
-
-def test_next_items_skips_tried_including_failures():
-    ranked = [ioc("ip", "1.1.1.%d" % i) for i in range(1, 13)]
-    ranked.insert(2, ioc("ip", "10.0.0.1", not_enrichable="ip_not_public"))
-    state = fresh_state(ranked)
-    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
-    for item in [r for r in ranked if not r["not_enrichable"]][:4]:
-        enrich_jobs.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
-    enrich_jobs.store_result(state, enrich.not_enriched(ranked[5], "timed out"))
-    assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
-    assert len(enrich_jobs.next_items(state, 100)) == 7
 
 
 def test_store_result_replaces_a_retry():
@@ -280,13 +377,39 @@ def test_short_reason_covers_every_scoring_phrase():
     assert findings.enumeration_findings(burst)[0]["reason"] \
         .startswith("burst of discovery commands")
     assert reasons.short_why(["+20 t (x)", "+20 t (y)", "+10 u"]) == "t · u"
-    assert reasons.short_why([
-        "+20 connection from a program that rarely needs the network (x)",
+
+
+def test_why_lines_one_line_per_process():
+    lines = reasons.why_lines([
+        "+20 process a.exe: connection from a program that rarely needs the network (x)",
+        "+30 looks like microsoft.com",
         "+20 process a.exe: file runs from a user-writable path (x)",
         "+40 process a.exe: writes an autorun registry key (k)",
         "+20 process b.exe: file runs from a user-writable path (y)",
-    ]) == ("contacted by a program that rarely needs the network · a.exe runs from a user folder "
-           "and sets an autorun registry key · b.exe runs from a user folder")
+        "+20 process b.exe: file runs from a user-writable path (z)",
+    ])
+    assert lines == [
+        "a.exe: contacted by a program that rarely needs the network and runs from a "
+        "user folder and sets an autorun registry key",
+        "looks like microsoft.com",
+        "b.exe: runs from a user folder",
+    ]
+    assert reasons.short_why(["+20 process b.exe: double extension (.pdf.exe)", "+5 u"]) \
+        == "b.exe: has a double extension (.pdf.exe) · u"
+    assert reasons.why_lines([]) == []
+
+
+def test_touched_by_caps_names_and_counts_in_hover():
+    item = ioc("ip", "8.8.8.8")
+    item["record"]["process_guids"] = ["A", "B", "A2", "C", "D", "gone"]
+    table = {"A": {"image": r"C:\x\chrome.exe"}, "A2": {"image": r"C:\y\chrome.exe"},
+             "B": {"image": r"C:\x\svchost.exe"}, "C": {"image": r"C:\x\c.exe"},
+             "D": {"image": ""}}
+    short, full = rows.touched_by(item, table)
+    assert short == "chrome.exe, svchost.exe, c.exe +1 more"
+    assert full == "chrome.exe ×2\nsvchost.exe ×1\nc.exe ×1\nunknown process ×2"
+    item["record"]["process_guids"] = ["B"]
+    assert rows.touched_by(item, table) == ("svchost.exe", "svchost.exe ×1")
 
 
 def process_entry(image, time="2023-12-14 03:42:00", **lists):
@@ -458,6 +581,21 @@ def test_ioc_details_reads_answers_and_tags():
     assert details[("ip", "8.8.8.8")]["score"] == 30
     assert details[("dns", "x.local")]["portal"] == "not sent: internal name"
     assert details[("dns", "a.example")]["portal"] == "not requested"
+    assert [details[k]["rank"] for k in [("ip", "8.8.8.8"), ("dns", "x.local"),
+                                         ("dns", "a.example")]] == [1, 2, 3]
+    assert details[("ip", "8.8.8.8")]["action"] == ""
+    assert details[("dns", "x.local")]["action"] == ""
+    assert details[("dns", "a.example")]["action"] == "Look up"
+
+
+def test_ioc_action_same_rules_for_every_tab():
+    item = ioc("ip", "8.8.8.8")
+    assert rows.ioc_action(item, "not requested") == "Look up"
+    assert rows.ioc_action(item, enrich.not_enriched(item, "timed out")) == "Retry"
+    assert rows.ioc_action(item, {"status": "partial"}) == ""
+    assert rows.ioc_action(item, {"status": "enriched"}) == ""
+    assert rows.ioc_action(ioc("dns", "x.local", not_enrichable="dns_internal"),
+                           "not requested") == ""
 
 
 def test_timeline_dark_option_uses_light_text():

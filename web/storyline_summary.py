@@ -5,7 +5,7 @@ details (local score and portal answer) looked up when the card is drawn.
 from scoring.paths import file_name
 from web.config import NOT_ENRICHABLE_TEXT, PORTAL_HIT_LABELS
 from web.reasons import portal_text, short_reason, short_why
-from web.rows import answers_by_ioc, count_text
+from web.rows import answers_by_ioc, count_text, ioc_action
 
 
 def chain_title(table, finding):
@@ -18,7 +18,7 @@ def chain_title(table, finding):
     the network". The process is the one the finding belongs to; the arrow
     part appears only for an IP or DNS subject (a hash subject is the
     process's own file, so its long value is left out).
-    Used by: build_storyline (the card header) and timeline_data.slice_choices.
+    Used by: build_chain_card (the card header) and timeline_data.slice_choices.
     """
     if finding is None:
         return "nothing flagged"
@@ -35,22 +35,27 @@ def ioc_details(state):
 
     Input: state, an UPLOADS entry (reads "ranked" and "results"; results
     are copied first because the enrich thread may add to them).
-    Output: {(type, value): {"score", "reasons", "portal"}}. portal is the
-    portal's common-shape answer, the text "not requested", or the plain
-    not-enrichable reason (for example "not sent: internal name").
-    Used by: build_storylines_tab, worked out on every draw so new portal
+    Output: {(type, value): {"rank", "score", "reasons", "portal",
+    "action"}}. rank is the IOC's 1-based place in "ranked", so a chain's
+    Look up button can call web.actions.lookup_one with a number the server
+    made. portal is the portal's common-shape answer, the text "not
+    requested", or the plain not-enrichable reason (for example "not sent:
+    internal name"). action comes from rows.ioc_action ("Look up", "Retry"
+    or "").
+    Used by: build_chains_tab, worked out on every draw so new portal
     answers appear without rebuilding the chains.
     """
     answers = answers_by_ioc(list(state["results"]))
     details = {}
-    for item in state["ranked"]:
+    for rank, item in enumerate(state["ranked"], 1):
         key = (item["type"], item["value"])
+        portal = answers.get(key, "not requested")
+        action = ioc_action(item, portal)
         if item["not_enrichable"]:
             portal = NOT_ENRICHABLE_TEXT.get(item["not_enrichable"], "not sent")
-        else:
-            portal = answers.get(key, "not requested")
-        details[key] = {"score": item["score"], "reasons": item["reasons"],
-                        "portal": portal}
+        details[key] = {"rank": rank, "score": item["score"],
+                        "reasons": item["reasons"], "portal": portal,
+                        "action": action}
     return details
 
 
@@ -64,7 +69,7 @@ def summarize_storyline(table, chain, process_scores, details):
     "portal_hits": [text], "first": time text, "last": time text}.
     flagged are processes with a local score above 0; portal_hits are IOCs a
     portal labelled suspicious or worse.
-    Used by: summary_caption and build_storyline.
+    Used by: build_chain_card (caption and portal hits).
     """
     flagged = []
     ips = set()
@@ -106,7 +111,7 @@ def summary_caption(summary):
     Input: summary from summarize_storyline.
     Output: text such as "9 processes · 2 flagged · 3 remote addresses ·
     1 DNS name · 120 files · 2 registry writes · 03:42–04:10". Zero counts
-    (other than processes) are left out. Used by: build_storyline.
+    (other than processes) are left out. Used by: build_chain_card.
     """
     parts = [count_text(summary["processes"], "process", "processes")]
     if summary["flagged"]:
