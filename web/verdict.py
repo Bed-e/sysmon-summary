@@ -31,5 +31,5 @@ def make_verdict(chains):
         top = chains["chains"][0]
         level = score_level(top["score"])
         reason = "Strongest chain: #1 %s, score %d." % (
-            chain_title(chains["table"], top["title_finding"]), top["score"])
+            chain_title(chains["table"], top["title_finding"], top["title_more"]), top["score"])
     return {"label": VERDICT_LABELS[level], "level": level, "reason": reason}

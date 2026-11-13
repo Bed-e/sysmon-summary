@@ -167,7 +167,7 @@ def build_chain_card(view, number, details):
     chain = chains["chains"][number - 1]
     table = chains["table"]
     summary = summarize_chain(table, chain, view["process_scores"], details)
-    title = "#%d  ·  %s" % (number, chain_title(table, chain["title_finding"]))
+    title = "#%d  ·  %s" % (number, chain_title(table, chain["title_finding"], chain["title_more"]))
     sendable = [item for item in chain_items(view["state"], number)
                 if details[(item["type"], item["value"])]["action"] == "Look up"]
     box = ui.expansion(value=(number in view["open_chains"]),

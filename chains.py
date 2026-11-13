@@ -13,6 +13,7 @@ Flow:
     iocs (iocs.collect_iocs)                      -> attach_iocs
     events                                        -> find_dropped_by
     process_scores (scoring.build_process_scores) -> strongest_finding
+                                                  -> other_reason_count
     build_chains runs all of the above once per upload and returns the
     sorted result, which web/ reads.
 
@@ -235,23 +236,66 @@ def find_dropped_by(table, events):
 def strongest_finding(guids, process_scores):
     """Pick the one finding that best explains why a tree is suspicious.
 
-    Input: guids, one tree in walk_tree order; process_scores from
-    scoring.build_process_scores.
-    Output: the finding dict with the most points among those processes
-    (the earliest in tree order on a tie), or None when none has a finding
-    with points above 0.
-    Used by: build_chains, for the chain's title ("what made it
-    suspicious", not the root process).
+    Purpose: name a chain after its MOST SUSPICIOUS PROCESS, not after
+    whichever single finding happens to be the biggest. Two processes can
+    each have a +40 finding (a browser registering its own startup entry,
+    and malware doing the same), but the malware may also run from
+    Downloads and so score 60. The title must point at the 60.
+
+    Input: guids, one tree in walk_tree order (from walk_tree, inside
+    build_chains); process_scores from scoring.build_process_scores (each
+    entry has "score" and "findings").
+    How: first the process with the highest process score is chosen (the
+    earliest in tree order on a tie); then that process's finding with the
+    most points (the earliest on a tie).
+    Output: that finding dict, or None when no process in the tree has a
+    score above 0.
+    Used by: build_chains, which stores it as the chain's "title_finding";
+    web.chain_summary.chain_title turns it into the title every tab shows.
     """
-    best = None
+    top = None
     for guid in guids:
         process = process_scores.get(guid)
-        if process is None:
+        if process is None or process["score"] <= 0:
             continue
-        for finding in process["findings"]:
-            if finding["points"] > 0 and (best is None or finding["points"] > best["points"]):
-                best = finding
+        if top is None or process["score"] > top["score"]:
+            top = process
+    if top is None:
+        return None
+
+    best = None
+    for finding in top["findings"]:
+        if finding["points"] > 0 and (best is None or finding["points"] > best["points"]):
+            best = finding
     return best
+
+
+def other_reason_count(process, finding):
+    """Count the other clues the title process has, for the "(+N more)" hint.
+
+    Purpose: a chain title shows only one finding. This tells the reader
+    how many more reasons the same process has, so a title like
+    "x.exe — sets an autorun registry key (+1 more)" makes clear there is
+    more to see inside the card.
+
+    Input: process, one process_scores entry (from
+    scoring.build_process_scores) for the process the title names; finding,
+    the title finding picked by strongest_finding (may be None).
+    How: the distinct reason texts with points above 0 are counted, minus
+    the title's own reason. A reason repeated once per IP or domain counts
+    once, the same way the process score counts it.
+    Output: an int, 0 when there is nothing else (or no finding).
+    Used by: build_chains, which stores it as the chain's "title_more";
+    web.chain_summary.chain_title adds it to the title.
+    """
+    if process is None or finding is None:
+        return 0
+    reasons = set()
+    for other in process["findings"]:
+        if other["points"] > 0:
+            reasons.add(other["reason"])
+    reasons.discard(finding["reason"])
+    return len(reasons)
 
 
 def build_chains(events, iocs, process_scores):
@@ -261,6 +305,7 @@ def build_chains(events, iocs, process_scores):
     process_scores from scoring.build_process_scores.
     Output: {"table": {guid: process entry},
              "chains": [{"root": guid, "score": int, "title_finding": finding,
+                         "title_more": int (other reasons of the title process),
                          "guids": [guid, ...] in tree order,
                          "flagged": [guids with a score above 0]}],
              "other": [root guids of trees with nothing flagged],
@@ -290,10 +335,13 @@ def build_chains(events, iocs, process_scores):
         if not flagged:
             other.append(root)
             continue
+        title = strongest_finding(guids, process_scores)
+        title_process = process_scores.get(title["guid"]) if title else None
         chains.append({
             "root": root,
             "score": score,
-            "title_finding": strongest_finding(guids, process_scores),
+            "title_finding": title,
+            "title_more": other_reason_count(title_process, title),
             "guids": guids,
             "flagged": flagged,
         })

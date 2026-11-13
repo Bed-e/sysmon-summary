@@ -223,7 +223,7 @@ def slice_choices(chains):
     table = chains["table"]
     for number, chain in enumerate(chains["chains"][:CHAIN_CHOICES], 1):
         choices["chain:%d" % number] = "Chain #%d: %s (%d processes)" % (
-            number, chain_title(table, chain["title_finding"]), len(chain["guids"]))
+            number, chain_title(table, chain["title_finding"], chain["title_more"]), len(chain["guids"]))
     choices["all"] = "All processes (%d)" % len(table)
     return choices
 
