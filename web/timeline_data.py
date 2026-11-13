@@ -8,9 +8,9 @@ import calendar
 from scoring.network import parse_time
 from scoring.paths import file_name
 from web.config import (DETAIL_LENGTH, EVENT_LANES, HIGH_SCORE, INDENT,
-                        MAX_DEPTH, STORYLINE_CHOICES)
+                        MAX_DEPTH, CHAIN_CHOICES)
 from web.reasons import short_why
-from web.storyline_summary import chain_title
+from web.chain_summary import chain_title
 
 
 def event_lane(event):
@@ -103,7 +103,7 @@ def process_spans(events):
 def flagged_slice(table, process_scores):
     """Pick the flagged processes and every process above them.
 
-    Input: table from storylines.build_chains; process_scores from
+    Input: table from chains.build_chains; process_scores from
     scoring.build_process_scores.
     Output: a set of guids: each process with a local score above 0, plus
     its parent, grandparent and so on (walking parent_guid while the parent
@@ -124,10 +124,10 @@ def flagged_slice(table, process_scores):
     return chosen
 
 
-def storyline_slice(chains, number):
+def chain_slice(chains, number):
     """Return the set of guids in chain `number` (1-based).
 
-    Input: chains from storylines.build_chains; number, a rank.
+    Input: chains from chains.build_chains; number, a rank.
     Output: the guids of that chain's process tree.
     Used by: slice_guids.
     """
@@ -137,7 +137,7 @@ def storyline_slice(chains, number):
 def order_rows(table, guids):
     """Put the chosen processes in tree order, one row each.
 
-    Input: table from storylines.build_chains; guids, the chosen set.
+    Input: table from chains.build_chains; guids, the chosen set.
     Output: a list of (guid, depth). A chosen process whose parent is not
     chosen is a root (depth 0). Roots, and the children under each process,
     are sorted by start time. A process is never listed twice.
@@ -213,16 +213,16 @@ def make_suspicious_rows(events, process_scores):
 def slice_choices(chains):
     """Build the entries of the timeline's "Show" dropdown.
 
-    Input: chains from storylines.build_chains.
-    Output: {value: label}: "flagged" (the default), "story:1" ...
-    "story:20" for the top STORYLINE_CHOICES chains (each named by its
+    Input: chains from chains.build_chains.
+    Output: {value: label}: "flagged" (the default), "chain:1" ...
+    "chain:20" for the top CHAIN_CHOICES chains (each named by its
     strongest finding, as on its card), and "all".
     Used by: build_timeline_tab.
     """
     choices = {"flagged": "Flagged processes and their parents"}
     table = chains["table"]
-    for number, chain in enumerate(chains["chains"][:STORYLINE_CHOICES], 1):
-        choices["story:%d" % number] = "Chain #%d: %s (%d processes)" % (
+    for number, chain in enumerate(chains["chains"][:CHAIN_CHOICES], 1):
+        choices["chain:%d" % number] = "Chain #%d: %s (%d processes)" % (
             number, chain_title(table, chain["title_finding"]), len(chain["guids"]))
     choices["all"] = "All processes (%d)" % len(table)
     return choices
@@ -238,8 +238,8 @@ def slice_guids(view, choice):
     chains = view["chains"]
     if choice == "all":
         return set(chains["table"])
-    if choice.startswith("story:"):
-        number = choice[len("story:"):]
+    if choice.startswith("chain:"):
+        number = choice[len("chain:"):]
         if number.isdigit() and 1 <= int(number) <= len(chains["chains"]):
-            return storyline_slice(chains, int(number))
+            return chain_slice(chains, int(number))
     return flagged_slice(chains["table"], view["process_scores"])

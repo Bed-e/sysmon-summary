@@ -1,7 +1,7 @@
 """Readable text for IOC reasons and portal answers.
 
 scoring/ writes long reason sentences; these functions shorten them for the
-IOC table and the storyline summaries, and turn a portal result into words.
+IOC table and the chain summaries, and turn a portal result into words.
 """
 
 from web.config import SHORT_REASONS
@@ -58,7 +58,7 @@ def reason_parts(text):
     who = ""
     if text.startswith("process ") and ": " in text:
         who, text = text[len("process "):].split(": ", 1)
-        first, _, rest = text.partition(" ")  # storylines put points here
+        first, _, rest = text.partition(" ")  # some reasons put points here
         if first[:1] in "+-" and first[1:].isdigit():
             text = rest
 
@@ -95,7 +95,7 @@ def short_why(reasons):
 
     Input: reasons, a list of scoring texts (see why_lines).
     Output: the why_lines joined with " · ".
-    Used by: summarize_storyline and make_suspicious_rows (one-line
+    Used by: summarize_chain and make_suspicious_rows (one-line
     summaries of a process's findings).
     """
     return " · ".join(why_lines(reasons))

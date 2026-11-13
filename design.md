@@ -31,7 +31,7 @@ Each step has one output, and the next step reads it. Data flows one way.
   2 collect      iocs.collect_iocs      -> iocs: {ip, dns, hash} -> {value: record}  (facts only, no scores)
   3 findings     scoring                -> findings: list of {guid, points, reason, kind, subject}
   4 processes    scoring                -> process_scores: {guid: {image, score, findings}}  (worked out once)
-  5 chains       storylines             -> {table, chains, other}
+  5 chains       chains.build_chains    -> {table, chains, other}
   6 IOC ranking  scoring + filters      -> ranked IOC rows, each with an enrichability tag
   7 enrich       enrich + web queue     -> results: {(type, value): common-shape answer}   (optional)
   8 show         web/                   -> tabs: Overview, Chains, IOCs, Timeline, Stats
@@ -52,7 +52,7 @@ A **finding** is one local clue about one process:
 
 - **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, and the **enumeration burst**. There is no minus for running from a system folder: living-off-the-land binaries (`rundll32`, `powershell`) doing bad things must not be discounted.
 - **Subject findings** are about one IOC the process touched, worked out per process:
-  - IP: the connection comes from a program that rarely needs the network but that attackers use to download or call home (`powershell`, `cmd`, `mshta`, `rundll32`, `certutil`, `bitsadmin`, ...: `RARE_NETWORK_PROCESSES`), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing). *Previously* any program not on a short browser allowlist fired, which flagged OneDrive, Teams and svchost.
+  - IP: the connection comes from a program that rarely needs the network but that attackers use to download or call home (`powershell`, `cmd`, `mshta`, `rundll32`, `certutil`, `bitsadmin`, ...: `RARE_NETWORK_PROCESSES`), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing).
   - DNS: very long or high-entropy label, or a close lookalike of a well-known name.
   - Hash: an autorun registry value written by *another* process contains this file's full path (lowercased substring; a bare filename never matches).
 - **Enumeration burst:** `ENUM_MIN_COUNT` or more discovery commands (`whoami`, `ipconfig`, `net`/`net1`, `systeminfo`, `nltest`, `tasklist`, `netstat`, `quser`, `arp`, `route`, `hostname`, ...) started by the **same parent** within `ENUM_WINDOW_SECONDS`. The points go to the parent (the shell doing the recon).
@@ -80,7 +80,7 @@ Chains are built **once** at upload. Portal answers are never stored in them: th
 - the subject findings about this IOC, plus
 - the *process* findings of the highest-scoring process that touched it.
 
-So a lookalike domain ranks high, but chrome's other 300 domains do not inherit that finding. Ties: more sightings, then earliest first seen.
+So a lookalike domain ranks high, but chrome's other 300 domains do not inherit that finding. Ties: more sightings, then earliest first seen. Every reason names its process (`process chrome.exe: ...`), so the IOC table can group them by process.
 
 **Enrichability tag.** Every IOC stays visible. Each gets `enrichable: True`, or a reason it is not sent:
 
@@ -91,8 +91,6 @@ So a lookalike domain ranks high, but chrome's other 300 domains do not inherit 
 | must not send | DNS | `.local`, `.lan`, `.internal`, `.home`, `.arpa`, a single label, or in `data/ad_domains.txt` (`dns_internal`) |
 
 "Must not send" is a privacy rule from the IP and DNS portals' own designs, and it is checked again right before any call. Hashes are always enrichable.
-
-*Previously* these were "skip" rules that removed IOCs before ranking, and the skipped ones had their own tab.
 
 ## 7. Enrichment (step 7, optional)
 
@@ -125,13 +123,13 @@ Base URLs come from `.env`: `IP_PORTAL_URL`, `HASH_PORTAL_URL`, `DNS_PORTAL_URL`
 
 ## 8. Web app
 
-NiceGUI. Uploading parses, finds and ranks locally; no portal is called. The state for each upload (events, iocs, process scores, chains, ranked IOCs, queue, results) lives in a module-level dict keyed by a random upload id. Only the background thread writes results. A NiceGUI timer updates the progress bar, badges and table while the queue is running.
+NiceGUI. Uploading parses, finds and ranks locally; no portal is called. The state for each upload (events, iocs, process scores, chains, ranked IOCs, queue, results) lives in a module-level dict keyed by a random upload id. Only the background thread writes results. A NiceGUI timer updates the progress bar, badges and table while the queue is running. The progress bar sits above the tabs, so it shows on every tab, and is hidden until something is queued.
 
 Tabs, in order:
 
-1. **Overview:** the soft verdict and its one-line reason, then the top chains. The verdict comes from the highest chain score only, using the badge bands: 0 = **Likely safe**, 1–39 = **Suspicious**, 40+ = **Likely compromised**. Portal hits are shown but do not move the verdict.
-2. **Chains:** one card per chain (section 5) with its score badge, title, a one-line summary, the flagged processes and their findings, portal hits, the Enrich this chain button, and the process tree. Other activity is collapsed at the bottom. 10 at a time with Show more.
-3. **IOCs:** every IOC in rank order (section 6) with its why (grouped by process, full text on hover), the processes that touched it, its portal answer, and Look up / Retry. If it is not enrichable, the reason replaces the button.
+1. **Overview:** the soft verdict and its one-line reason, then the top 3 chains, each with Show in Chains. The verdict comes from the highest chain score only, using the badge bands: 0 = **Likely safe**, 1–39 = **Suspicious**, 40+ = **Likely compromised**. Portal hits are shown but do not move the verdict.
+2. **Chains:** one card per chain (section 5) with its score badge, title, a one-line summary, the flagged processes and their findings, portal hits, the Enrich this chain button, and the process tree. Other activity is collapsed at the bottom. 10 at a time with Show more. Open cards stay open when the page redraws.
+3. **IOCs:** every IOC in rank order (section 6) with its why (one line per process, `name: phrase`, full text on hover), Seen in (up to 3 process names, all of them on hover), its portal answer, and Look up / Retry. If it is not enrichable, the reason replaces the button.
 4. **Timeline:** one row per process in tree order, a bar from first to last event coloured by process score, dots per event type, and dashed parent-to-child links. A "Show" dropdown picks flagged processes and their parents (default), one chain, or all processes. A table of flagged processes sits under the chart.
 5. **Stats:** counts kept out of the way: events kept and dropped by ID, parse errors, IOCs found by type, IOCs not enrichable by reason, lookups done or failed, and events with no ProcessGuid.
 
@@ -145,16 +143,14 @@ The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / r
 | `iocs.py` | collect and de-duplicate IOCs |
 | `scoring/` | findings, process scores, IOC rank (`config.py` holds every weight and list) |
 | `filters.py` | enrichability tag |
-| `storylines.py` | process table, tree, chains, dropped-by |
+| `chains.py` | process table, tree, chains, dropped-by |
 | `enrich.py` | portal calls and conversion to the common shape |
 | `web/app.py`, `web/pages.py`, `web/upload.py` | entry point, pages, upload endpoint |
 | `web/actions.py`, `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | button actions, the queue and its thread, hash limits, shared state |
-| `web/tabs/` | one module per tab: overview, chains, iocs, timeline, stats |
-| `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, rows and chart data for the tabs; no UI code |
+| `web/tabs/` | one module per tab (overview, chains, iocs, timeline, stats) and `common` (Show more, badges, the Look up handler) |
+| `web/reasons.py`, `web/rows.py`, `web/chain_summary.py`, `web/verdict.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, rows, verdict and chart data for the tabs; no UI code |
 | `web/config.py`, `web/theme.py` | constants, columns, colours; theme and header |
 | `data/*.txt` | shared ranges, AD domains, well-known names, API limits |
-
-*Previously* `main.py` (command line) and `report.py` (static HTML) existed. They were removed in R2; the web app is the only interface.
 
 ## 10. Decisions
 
@@ -176,10 +172,10 @@ The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / r
 
 ## 12. Milestones
 
-Each milestone is on its own branch. Bed-e opens the pull requests.
+Each milestone is on its own branch. Bed-e opens the pull requests. All are done.
 
 - **R0 Design.** This file.
-- **R1 Findings.** `scoring/` produces findings with kind and subject, adds the enumeration burst and per-process network findings, and builds `process_scores` once. IOC rank by split inheritance is done here too (it had to change with the findings). Tests rewritten to findings.
-- **R2 Chains and enrichability.** `storylines.py` builds chains once (flagged trees, title finding, dropped-by, other activity). `filters.py` tags every IOC instead of splitting them off, and `enrich_one` refuses tagged IOCs. `main.py`, `report.py` and the cap were removed here, ahead of R4. The current tabs were only switched to the new data.
-- **R3 Web.** Queue and progress bar, Chains tab, IOCs reason column, Overview verdict, Stats tab. Remove Enrich next N, the warning dialog and the Skipped tab.
-- **R4 Cleanup.** Final pass on this file and on leftover names (for example `storylines.py` and the Storylines tab module, once R3 has replaced them).
+- **R1 Findings.** Findings with kind and subject, the enumeration burst, `process_scores` once, IOC rank by split inheritance.
+- **R2 Chains and enrichability.** Chains built once; every IOC tagged instead of skipped; `main.py` and `report.py` removed.
+- **R3 Web.** Queue and progress bar, Chains tab, IOCs reason column, Overview verdict, Stats tab.
+- **R4 Cleanup.** Storyline names became chain names; this file trimmed to the current app.

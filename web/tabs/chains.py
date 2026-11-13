@@ -2,7 +2,7 @@
 collapsed list of the process trees where nothing was flagged (design.md
 section 5).
 
-The chains are built once at upload (storylines.build_chains). This tab only
+The chains are built once at upload (chains.build_chains). This tab only
 draws them; portal answers are looked up by (type, value) on every draw, so
 enrichment never rebuilds a chain.
 """
@@ -10,12 +10,12 @@ enrichment never rebuilds a chain.
 from nicegui import ui
 
 from scoring.paths import file_name
-from storylines import walk_tree
+from chains import walk_tree
 from web.actions import enrich_chain
 from web.enrich_jobs import chain_items
 from web.reasons import portal_text, short_reason
-from web.storyline_summary import (chain_title, ioc_details,
-    summarize_storyline, summary_caption)
+from web.chain_summary import (chain_title, ioc_details,
+    summarize_chain, summary_caption)
 from web.tabs.common import build_show_more, lookup_handler, score_badge
 from web.timeline_data import order_rows
 
@@ -32,8 +32,8 @@ def build_ioc_line(view, key, detail):
     """Draw one IOC a flagged process touched.
 
     Input: view (for the button); key, (type, value) from the process
-    entry's "iocs" list (storylines.attach_iocs); detail, that IOC's entry
-    from storyline_summary.ioc_details (rank, score, portal, action).
+    entry's "iocs" list (chains.attach_iocs); detail, that IOC's entry
+    from chain_summary.ioc_details (rank, score, portal, action).
     Output: one row: type and value, the local score badge, the portal
     answer as text, and a Look up / Retry button when detail["action"] is
     set. For a not-enrichable IOC the portal text is the reason it is never
@@ -166,7 +166,7 @@ def build_chain_card(view, number, details):
     chains = view["chains"]
     chain = chains["chains"][number - 1]
     table = chains["table"]
-    summary = summarize_storyline(table, chain, view["process_scores"], details)
+    summary = summarize_chain(table, chain, view["process_scores"], details)
     title = "#%d  ·  %s" % (number, chain_title(table, chain["title_finding"]))
     sendable = [item for item in chain_items(view["state"], number)
                 if details[(item["type"], item["value"])]["action"] == "Look up"]
@@ -201,7 +201,7 @@ def build_other_activity(view):
     chains["table"]).
     Output: an expansion "Other activity (n process trees, nothing
     flagged)", closed at first. Inside, one plain line per tree: root name,
-    start time and process count (storylines.walk_tree), 10 at a time
+    start time and process count (chains.walk_tree), 10 at a time
     with Show more. Nothing is
     drawn when the list is empty.
     Used by: build_chains_tab.

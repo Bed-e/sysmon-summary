@@ -43,7 +43,7 @@ def test_normalize_ip_rejects_garbage_and_empty():
 
 
 def test_normalize_ip_keeps_private_addresses():
-    # Private addresses are the filter's job (M2), not this step's.
+    # Private addresses are the filter's job (filters.py), not this step's.
     assert normalize_ip("192.168.1.5") == "192.168.1.5"
 
 
