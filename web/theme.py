@@ -74,6 +74,8 @@ body, .q-page { background: var(--app-bg); color: var(--app-text); }
 .upload-button { padding: 0.65rem 1rem; border: 0; border-radius: 8px; cursor: pointer;
   background: var(--app-primary); color: #ffffff; font-weight: 600; font-size: 1rem; }
 .upload-button:hover { filter: brightness(1.1); }
+.upload-button:disabled { opacity: 0.7; cursor: wait; filter: none; }
+.upload-wait { margin: 0; color: var(--app-muted); text-align: center; }
 .count-grid { display: grid; gap: 0.75rem; width: 100%;
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
 .count-tile { background: var(--app-card); border: 1px solid var(--app-border);
