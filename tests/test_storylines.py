@@ -2,13 +2,13 @@
 .evtx file. Event dicts carry just the fields storylines.py reads."""
 
 from storylines import (
-    NOT_REQUESTED,
     attach_activity,
-    attach_ioc_results,
+    attach_iocs,
+    build_chains,
     build_process_table,
-    build_storylines,
+    find_dropped_by,
     link_children,
-    score_storyline,
+    strongest_finding,
     walk_tree,
 )
 
@@ -88,48 +88,93 @@ def test_walk_tree_is_parent_first_and_survives_a_loop():
     assert walk_tree(table, A) == [A, B, C]
 
 
-def ranked_item(ioc_type, value, score, guids):
-    return {"type": ioc_type, "value": value, "score": score,
-            "reasons": ["+%d test" % score],
-            "record": {"process_guids": guids}}
+# ---- attach_iocs ----
 
-
-def test_attach_ioc_results_pairs_portal_answer_or_not_requested():
+def test_attach_iocs_lists_type_and_value_per_process():
     table = make_table(EVENTS)
-    ranked = [ranked_item("ip", "1.2.3.4", 30, [B]),
-              ranked_item("dns", "evil.example", 20, [B, "{UNKNOWN}"])]
-    results = [{"type": "ip", "value": "1.2.3.4", "status": "enriched",
-                "score_0_to_100": 80, "label": "bad", "reasons": []}]
-    attach_ioc_results(table, ranked, results)
-    by_value = {i["value"]: i for i in table[B]["iocs"]}
-    assert by_value["1.2.3.4"]["portal"]["score_0_to_100"] == 80
-    assert by_value["evil.example"]["portal"] == NOT_REQUESTED
-    assert by_value["1.2.3.4"]["local_score"] == 30
+    iocs = {"ip": {"1.2.3.4": {"process_guids": [B, "{UNKNOWN}"]}},
+            "dns": {"evil.example": {"process_guids": [B, C]}},
+            "hash": {}}
+    attach_iocs(table, iocs)
+    assert table[B]["iocs"] == [("ip", "1.2.3.4"), ("dns", "evil.example")]
+    assert table[C]["iocs"] == [("dns", "evil.example")]
+    assert table[A]["iocs"] == []
 
 
-def test_score_storyline_uses_highest_item_not_a_sum():
-    table = make_table(EVENTS)
-    link_children(table)
-    attach_ioc_results(table, [ranked_item("ip", "1.2.3.4", 30, [C]),
-                               ranked_item("ip", "5.6.7.8", 10, [A])], [])
-    process_scores = {A: {"score": 5, "findings": [{"points": 5, "reason": "small"}]},
-                      B: {"score": 50, "findings": [{"points": 50, "reason": "double extension"}]}}
-    score, reasons = score_storyline(table, A, process_scores)
-    assert score == 50
-    assert "process C:\\Users\\bob\\Downloads\\invoice.pdf.exe: +50 double extension" in reasons
-    assert reasons[-1] == "highest of 4 scored items in this tree"
+# ---- find_dropped_by ----
+
+def written(guid, path, time, image="C:\\Program Files\\Google\\chrome.exe"):
+    return {"event_id": 11, "time": time, "ProcessGuid": guid, "Image": image,
+            "TargetFilename": path}
 
 
-def test_score_storyline_with_nothing_scored_is_zero():
-    table = make_table([proc(D, "", "C:\\x.exe", "t")])
-    link_children(table)
-    assert score_storyline(table, D, {}) == (0, [])
+def test_dropped_by_finds_the_earliest_other_writer():
+    events = EVENTS + [
+        proc("{CH}", "", "C:\\Program Files\\Google\\chrome.exe", "2024-01-01T00:00:00"),
+        written("{CH}", "c:\\users\\bob\\downloads\\INVOICE.PDF.EXE", "2024-01-01T00:00:01"),
+        written("{X}", "C:\\Users\\bob\\Downloads\\invoice.pdf.exe", "2024-01-01T00:00:01.5",
+                image="C:\\x\\other.exe"),
+    ]
+    table = make_table(events)
+    find_dropped_by(table, events)
+    assert table[B]["dropped_by"] == {"guid": "{CH}",
+                                      "image": "C:\\Program Files\\Google\\chrome.exe",
+                                      "time": "2024-01-01T00:00:01"}
+    assert table[A]["dropped_by"] is None
 
 
-def test_build_storylines_sorts_highest_score_first():
-    ranked = [ranked_item("ip", "1.2.3.4", 99, [D])]
-    result = build_storylines(EVENTS, ranked, [], {})
-    assert [s["root"] for s in result["storylines"]][0] == D
-    assert result["storylines"][0]["score"] == 99
-    assert result["storylines"][1]["size"] == 3
+def test_dropped_by_ignores_a_process_writing_its_own_file():
+    events = EVENTS + [written(B, "C:\\Users\\bob\\Downloads\\invoice.pdf.exe",
+                               "2024-01-01T00:00:03")]
+    table = make_table(events)
+    find_dropped_by(table, events)
+    assert table[B]["dropped_by"] is None
+
+
+# ---- strongest_finding / build_chains ----
+
+def finding(guid, points, reason, subject=None):
+    return {"guid": guid, "points": points, "reason": reason,
+            "kind": "process" if subject is None else "subject", "subject": subject}
+
+
+def scores(**by_guid):
+    table = {}
+    for guid, findings in by_guid.items():
+        table["{%s}" % guid] = {"image": "", "findings": findings,
+                                "score": sum(f["points"] for f in findings)}
+    return table
+
+
+def test_strongest_finding_is_highest_points_then_earliest():
+    process_scores = scores(A=[finding(A, 20, "user path")],
+                            B=[finding(B, 50, "double extension"),
+                               finding(B, 20, "user path")],
+                            C=[finding(C, 50, "late tie")])
+    assert strongest_finding([A, B, C], process_scores)["reason"] == "double extension"
+    assert strongest_finding([D], process_scores) is None
+
+
+def test_build_chains_keeps_only_flagged_trees_and_ranks_them():
+    iocs = {"ip": {}, "dns": {}, "hash": {}}
+    process_scores = scores(B=[finding(B, 50, "double extension")],
+                            C=[finding(C, 20, "c2", ("ip", "1.2.3.4"))])
+    result = build_chains(EVENTS, iocs, process_scores)
+    assert [c["root"] for c in result["chains"]] == [A]
+    chain = result["chains"][0]
+    assert chain["score"] == 50
+    assert chain["guids"] == [A, B, C]
+    assert chain["flagged"] == [B, C]
+    assert chain["title_finding"]["reason"] == "double extension"
+    assert result["other"] == [D]
     assert result["events_without_guid"] == 0
+
+
+def test_build_chains_sorts_by_score_then_size():
+    iocs = {"ip": {}, "dns": {}, "hash": {}}
+    process_scores = scores(C=[finding(C, 10, "small")], D=[finding(D, 40, "big")])
+    result = build_chains(EVENTS, iocs, process_scores)
+    assert [c["root"] for c in result["chains"]] == [D, A]
+    assert result["other"] == []
+
+

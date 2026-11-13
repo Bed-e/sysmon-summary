@@ -23,7 +23,7 @@ from scoring.processes import process_wide_points
 def score_ioc(item, process_scores):
     """Score one IOC by split inheritance.
 
-    Input: item, {"type", "value", "record"} from filters.split_iocs (the
+    Input: item, {"type", "value", "record"} from filters.list_iocs (the
     record's "process_guids" lists every process that touched it);
     process_scores from processes.build_process_scores.
     Output: (score, reasons). reasons is a list of text such as
@@ -62,12 +62,13 @@ def score_ioc(item, process_scores):
 def rank_iocs(to_rank, process_scores):
     """Score every IOC in `to_rank` and return them highest score first.
 
-    Input: to_rank from filters.split_iocs; process_scores from
+    Input: to_rank from filters.list_iocs (every IOC, each with a
+    "not_enrichable" tag); process_scores from
     processes.build_process_scores (worked out once per dump).
-    Output: a list of {"type", "value", "score", "reasons", "record"}.
-    Ties: more sightings first, then earliest first seen.
-    Used by: web.enrich_jobs.make_state (and main.py until R4). The IOC
-    table, the enrich code and the storylines read the result.
+    Output: a list of {"type", "value", "score", "reasons", "record",
+    "not_enrichable"}. Ties: more sightings first, then earliest first seen.
+    Used by: web.enrich_jobs.make_state. The IOC table and the enrich code
+    read the result.
     """
     ranked = []
     for item in to_rank:
@@ -78,6 +79,7 @@ def rank_iocs(to_rank, process_scores):
             "score": score,
             "reasons": reasons,
             "record": item["record"],
+            "not_enrichable": item.get("not_enrichable", ""),
         })
 
     ranked.sort(key=lambda r: (-r["score"], -r["record"]["count"],

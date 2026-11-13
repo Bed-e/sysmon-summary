@@ -9,11 +9,12 @@ import threading
 import time
 
 from enrich import enrich_one, not_enriched
-from filters import load_config, split_iocs
+from filters import list_iocs, load_config
 from iocs import collect_iocs
 from scoring.findings import find_findings
 from scoring.processes import build_process_scores
 from scoring.ranking import rank_iocs
+from storylines import build_chains
 from web.config import BUDGET_REASON, USAGE_PATH
 from web.limits import add_daily_count, read_daily_count, seconds_to_wait
 from web.runtime import LAST_HASH, START_LOCK
@@ -25,7 +26,8 @@ def next_items(state, n):
     Input: state (an UPLOADS entry: ranked, results); n from choose_n.
     Output: up to n ranked dicts, in rank order, with no result yet. A failed
     lookup counts as tried, so "next" moves past it; its row has a Retry
-    button instead. So with 5 already done, n=5 gives ranks 6 to 10.
+    button instead. So with 5 already done, n=5 gives ranks 6 to 10. IOCs
+    tagged not_enrichable are passed over.
     Used by: ask_enrich.
     """
     tried = set()
@@ -35,6 +37,8 @@ def next_items(state, n):
     for item in state["ranked"]:
         if len(items) >= n:
             break
+        if item["not_enrichable"]:
+            continue
         if (item["type"], item["value"]) not in tried:
             items.append(item)
     return items
@@ -75,8 +79,8 @@ def run_enrichment(state, items, urls, limits, usage_path=USAGE_PATH,
     are counted, and become "not enriched" once the daily budget is used up
     (a hard stop). A crash sets state["run"] = "failed" with the text in
     state["error"]; a normal end sets "done".
-    Used by: start_enrichment (as the thread target). Same sequential loop
-    as enrich.enrich_ranked.
+    Used by: start_enrichment (as the thread target). A plain sequential
+    loop: one lookup at a time.
     """
     try:
         spacing = 60.0 / limits["hash_per_minute"]
@@ -137,8 +141,9 @@ def status_text(state):
         return "No portal has been called yet."
     if run == "running":
         return "Running: %d of %d done." % (state["run_done"], state["run_size"])
-    tried = "%d of %d ranked IOCs tried so far." % (len(state["results"]),
-                                                     len(state["ranked"]))
+    enrichable = len([item for item in state["ranked"] if not item["not_enrichable"]])
+    tried = "%d of %d enrichable IOCs tried so far." % (len(state["results"]),
+                                                         enrichable)
     if run == "done":
         return "Last run finished: %d looked up. %s" % (state["run_done"], tried)
     return "Run failed: %s. %s" % (state["error"], tried)
@@ -149,19 +154,21 @@ def make_state(name, parsed):
 
     Input: name, the uploaded file's base name (shown as a title only);
     parsed, the dict from parse.read_events.
-    Output: the state dict {name, events, iocs, process_scores, skipped,
-    ranked, results, run, error, run_size, run_done, version}. Findings and
-    process scores are worked out once here (pipeline steps 3 and 4) and
-    read by every tab. No portal is called.
+    Output: the state dict {name, events, iocs, process_scores, chains,
+    ranked, results, run, error, run_size, run_done, version}. Pipeline
+    steps 2 to 6 run once here (collect, findings, process scores, chains,
+    IOC rank with the enrichability tag) and every tab reads the result.
+    Enrichment only ever adds to "results"; it never rebuilds the rest.
+    No portal is called.
     Used by: upload_endpoint.
     """
     config = load_config()
     events = parsed["events"]
     iocs = collect_iocs(events)
     process_scores = build_process_scores(events, find_findings(events, iocs, config))
-    to_rank, skipped = split_iocs(iocs, config)
-    ranked = rank_iocs(to_rank, process_scores)
+    chains = build_chains(events, iocs, process_scores)
+    ranked = rank_iocs(list_iocs(iocs, config), process_scores)
     return {"name": name, "events": events, "iocs": iocs,
-            "process_scores": process_scores, "skipped": skipped,
+            "process_scores": process_scores, "chains": chains,
             "ranked": ranked, "results": [], "run": "idle",
             "error": "", "run_size": 0, "run_done": 0, "version": 0}

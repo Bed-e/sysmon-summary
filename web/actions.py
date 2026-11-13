@@ -9,7 +9,6 @@ cycle between this module and web/tabs/.
 from nicegui import ui
 
 from enrich import load_portal_urls
-from storylines import build_storylines
 from web.enrich_jobs import next_items, start_enrichment, status_text
 from web.limits import load_limits, needs_warning, read_daily_count
 from web.rows import choose_n, make_counts_rows
@@ -96,6 +95,9 @@ def lookup_one(view, rank):
     ranked = view["state"]["ranked"]
     if not isinstance(rank, int) or rank < 1 or rank > len(ranked):
         return
+    if ranked[rank - 1]["not_enrichable"]:
+        ui.notify("This IOC is never sent to a portal.")
+        return
     confirm_and_start(view, [ranked[rank - 1]])
 
 
@@ -105,9 +107,11 @@ def refresh_view(view):
     Input: view (state and the live parts stored by the build_* functions).
     Output: nothing. Updates the status line, the count tiles (through
     view["draw_counts"]) and the Enrich button every tick, and redraws the
-    IOC rows only when an answer arrived (state["version"] changed) or the run state changed. When the run is no
-    longer "running" it stops the timer and, if the answers changed, rebuilds
-    the storylines once so the portal answers appear inside them.
+    IOC rows only when an answer arrived (state["version"] changed) or the
+    run state changed. When the run is no longer "running" it stops the
+    timer and, if the answers changed, redraws the chains once so the
+    portal answers appear inside them. The chains themselves are never
+    rebuilt: they are worked out once at upload.
     Used by: report_page (timer) and begin_enrichment.
     """
     state = view["state"]
@@ -122,7 +126,5 @@ def refresh_view(view):
     if state["run"] != "running":
         view["timer"].deactivate()
         if view["story_version"] != state["version"]:
-            view["stories"] = build_storylines(state["events"], state["ranked"],
-                                               results, state["process_scores"])
             view["story_version"] = state["version"]
             view["redraw_story"]()

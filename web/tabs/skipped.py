@@ -1,4 +1,5 @@
-"""The Skipped tab: IOCs that were filtered out, with the reason.
+"""The Skipped tab: IOCs that are never sent to a portal, with the reason.
+(R3 removes this tab; the IOCs table shows the same reason per row.)
 """
 
 from nicegui import ui
@@ -9,16 +10,18 @@ from web.tabs.common import build_show_more
 
 
 def build_skipped_tab(view):
-    """Draw the Skipped tab: IOCs the filter never sent anywhere.
+    """Draw the Skipped tab: IOCs that are never sent anywhere.
 
-    Input: view; reads view["state"]["skipped"].
+    Input: view; reads view["state"]["ranked"] (items with a not_enrichable
+    tag).
     Output: draws a card with a title, a muted explanation and the audit
-    table with reason codes, 10 rows then "Show more". Used by: report_page.
+    table with the reasons, 10 rows then "Show more". Used by: report_page.
     """
-    rows = make_skipped_rows(view["state"]["skipped"])
+    rows = make_skipped_rows(view["state"]["ranked"])
     with ui.column().classes("app-card"):
-        ui.label("Skipped IOCs").classes("app-title")
-        ui.label("The filter never sent these to any portal.").classes("app-muted")
+        ui.label("Not enrichable IOCs").classes("app-title")
+        ui.label("These stay in the chains and the IOCs table, but are never "
+                 "sent to any portal.").classes("app-muted")
         table = ui.table(columns=SKIPPED_COLUMNS, row_key="value", rows=[])
         table.classes("w-full")
 

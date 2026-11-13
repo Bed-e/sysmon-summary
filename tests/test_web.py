@@ -13,14 +13,15 @@ from web import (config, enrich_jobs, limits, reasons, rows, runtime,
                  storyline_summary, timeline_chart, timeline_data, upload)
 
 
-def ioc(kind, value, score=10):
+def ioc(kind, value, score=10, not_enrichable=""):
     return {"type": kind, "value": value, "score": score, "reasons": ["+%d t" % score],
-            "record": {"process_guids": [], "count": 1}}
+            "record": {"process_guids": [], "count": 1},
+            "not_enrichable": not_enrichable}
 
 
 def fresh_state(ranked):
     return {"name": "x.evtx", "events": [], "iocs": {"ip": {}, "dns": {}, "hash": {}},
-            "skipped": [], "ranked": ranked, "results": [], "run": "idle",
+            "ranked": ranked, "results": [], "run": "idle",
             "error": "", "run_size": 0, "run_done": 0, "version": 0}
 
 
@@ -152,29 +153,41 @@ def test_make_ioc_rows_keeps_rank_order_and_marks_unrequested():
     assert rows.make_ioc_rows(ranked, [failed])[0]["action"] == "Retry"
 
 
+def test_not_enrichable_row_shows_reason_and_no_button():
+    shown = rows.make_ioc_rows([ioc("dns", "dc1.corp", 30, "dns_internal")], [])
+    assert shown[0]["portal"] == "not sent: internal name"
+    assert shown[0]["action"] == ""
+
+
 def test_make_skipped_rows_sorted():
-    skipped = [{"type": "dns", "value": "b", "reason": "z", "record": {"count": 2}},
-               {"type": "ip", "value": "a", "reason": "a", "record": {"count": 1}}]
-    shown = rows.make_skipped_rows(skipped)
-    assert [r["reason"] for r in shown] == ["a", "z"] and shown[0]["count"] == 1
+    ranked = [ioc("dns", "b.local", not_enrichable="dns_internal"),
+              ioc("ip", "8.8.8.8"),
+              ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")]
+    shown = rows.make_skipped_rows(ranked)
+    assert [r["value"] for r in shown] == ["b.local", "10.0.0.1"]
+    assert shown[0]["reason"] == "not sent: internal name" and shown[0]["count"] == 1
 
 
 def test_counts_and_status():
-    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2")])
-    state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}}, "dns": {}, "hash": {}}
+    state = fresh_state([ioc("ip", "1.1.1.1"), ioc("ip", "2.2.2.2"),
+                         ioc("ip", "10.0.0.1", not_enrichable="ip_not_public")])
+    state["iocs"] = {"ip": {"1.1.1.1": {}, "2.2.2.2": {}, "10.0.0.1": {}},
+                     "dns": {}, "hash": {}}
     ok = {"status": "enriched"}
     bad = {"status": "not_enriched"}
     shown = {r["item"]: r["value"] for r in rows.make_counts_rows(state, [ok, bad])}
     assert shown["Looked up on the portals"] == "1"
     assert shown["Lookup failed (not enriched)"] == "1"
     assert shown["Not requested"] == "0"
+    assert shown["Not enrichable (never sent anywhere)"] == "1"
+    assert shown["Enrichable"] == "2"
     assert enrich_jobs.status_text(state) == "No portal has been called yet."
     state.update(run="running", run_size=5, run_done=1)
     state["results"] = [ok]
     assert enrich_jobs.status_text(state) == "Running: 1 of 5 done."
     state.update(run="done")
     assert enrich_jobs.status_text(state) == ("Last run finished: 1 looked up. "
-                                      "1 of 2 ranked IOCs tried so far.")
+                                      "1 of 2 enrichable IOCs tried so far.")
     state.update(run="failed", error="boom")
     assert enrich_jobs.status_text(state).startswith("Run failed: boom.")
 
@@ -211,11 +224,12 @@ def test_upload_endpoint_success_stores_state_without_calling_portals(monkeypatc
 
 def test_next_items_skips_tried_including_failures():
     ranked = [ioc("ip", "1.1.1.%d" % i) for i in range(1, 13)]
+    ranked.insert(2, ioc("ip", "10.0.0.1", not_enrichable="ip_not_public"))
     state = fresh_state(ranked)
     assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(1, 6)]
-    for item in ranked[:4]:
+    for item in [r for r in ranked if not r["not_enrichable"]][:4]:
         enrich_jobs.store_result(state, {"type": "ip", "value": item["value"], "status": "enriched"})
-    enrich_jobs.store_result(state, enrich.not_enriched(ranked[4], "timed out"))
+    enrich_jobs.store_result(state, enrich.not_enriched(ranked[5], "timed out"))
     assert [i["value"] for i in enrich_jobs.next_items(state, 5)] == ["1.1.1.%d" % i for i in range(6, 11)]
     assert len(enrich_jobs.next_items(state, 100)) == 7
 
@@ -287,13 +301,14 @@ def test_summarize_storyline_and_caption():
     table = {
         "A": process_entry(r"C:\x\a.exe", ips=["1.2.3.4:443"], files=["f1", "f2"]),
         "B": process_entry(r"C:\x\b.exe", "2023-12-14 04:10:00", dns=["e.example"],
-                           registry=["k"], iocs=[{"type": "ip", "value": "1.2.3.4", "portal": hit}]),
+                           registry=["k"], iocs=[("ip", "1.2.3.4")]),
     }
     scores = {"B": {"image": r"C:\x\b.exe", "score": 40,
                     "findings": [{"guid": "B", "points": 40, "kind": "process", "subject": None,
                                   "reason": "writes an autorun registry key (k)"}]},
               "A": {"image": r"C:\x\a.exe", "score": 0, "findings": []}}
-    summary = storyline_summary.summarize_storyline(table, {"guids": ["A", "B"]}, scores)
+    details = {("ip", "1.2.3.4"): {"score": 20, "reasons": [], "portal": hit}}
+    summary = storyline_summary.summarize_storyline(table, {"guids": ["A", "B"]}, scores, details)
     assert summary["flagged"] == [{"name": "b.exe", "score": 40, "why": "sets an autorun registry key"}]
     assert summary["portal_hits"] == ["ip 1.2.3.4: portal 90 (malicious)"]
     assert storyline_summary.summary_caption(summary) == (
@@ -393,13 +408,16 @@ def test_row_slider_only_for_many_rows():
 
 def test_slice_choices_and_guids():
     table = tl_table()
-    stories = {"table": table,
-               "storylines": [{"root": "P", "size": 2, "guids": ["P", "C"]},
-                              {"root": "Q", "size": 1, "guids": ["Q"]}]}
-    choices = timeline_data.slice_choices(stories)
+    title = {"guid": "C", "points": 45, "reason": "double extension (.pdf.exe)",
+             "kind": "process", "subject": None}
+    chains = {"table": table,
+              "chains": [{"root": "P", "guids": ["P", "C"], "title_finding": title},
+                         {"root": "Q", "guids": ["Q"], "title_finding": None}]}
+    choices = timeline_data.slice_choices(chains)
     assert list(choices) == ["flagged", "story:1", "story:2", "all"]
-    assert choices["story:1"] == "Storyline #1: parent.exe (2 processes)"
-    view = {"stories": stories, "process_scores": TL_SCORES}
+    assert choices["story:1"] == ("Chain #1: child.exe — has a double extension "
+                                  "(.pdf.exe) (2 processes)")
+    view = {"chains": chains, "process_scores": TL_SCORES}
     assert timeline_data.slice_guids(view, "story:2") == {"Q"}
     assert timeline_data.slice_guids(view, "all") == set(table)
     assert timeline_data.slice_guids(view, "story:99") == {"C", "P"}  # unknown -> flagged
@@ -412,14 +430,34 @@ def test_event_detail_is_short():
     assert text.startswith("a.exe wrote") and len(text) == config.DETAIL_LENGTH
 
 
-def test_storyline_why_is_short():
-    lines = ["ip 1.2.3.4: +20 connection from a program that rarely needs the network (x)",
-               "ip 1.2.3.4: +40 process a.exe: writes an autorun registry key (k)",
-               "highest of 28 scored items in this tree"]
-    assert reasons.storyline_why(lines) == (
-        "ip 1.2.3.4: contacted by a program that rarely needs the network · a.exe sets an autorun registry key")
-    assert reasons.storyline_why(["process b.exe: +20 file runs from a user-writable path (p)"]) \
-        == "b.exe runs from a user folder"
+def test_chain_title_names_the_finding_not_the_root():
+    table = {"P": process_entry(r"C:\x\parent.exe"),
+             "C": process_entry(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")}
+    subject = {"guid": "C", "points": 20, "kind": "subject", "subject": ("ip", "1.2.3.4"),
+               "reason": "connection from a program that rarely needs the network (x)"}
+    assert storyline_summary.chain_title(table, subject) == (
+        "powershell.exe → 1.2.3.4 — contacted by a program that rarely needs the network")
+    burst = {"guid": "P", "points": 30, "kind": "process", "subject": None,
+             "reason": "burst of discovery commands: 3 in 9 s (whoami, net)"}
+    assert storyline_summary.chain_title(table, burst) == (
+        "parent.exe — started a burst of discovery commands (whoami, net)")
+    assert storyline_summary.chain_title(table, None) == "nothing flagged"
+    by_hash = {"guid": "C", "points": 40, "kind": "subject", "subject": ("hash", "ab" * 32),
+               "reason": "registry references this file's path (p)"}
+    assert storyline_summary.chain_title(table, by_hash) == (
+        "powershell.exe — an autorun key points to this file")
+
+
+def test_ioc_details_reads_answers_and_tags():
+    state = fresh_state([ioc("ip", "8.8.8.8", 30), ioc("dns", "x.local", 5, "dns_internal"),
+                         ioc("dns", "a.example", 0)])
+    state["results"] = [{"type": "ip", "value": "8.8.8.8", "status": "enriched",
+                         "score_0_to_100": 90, "label": "malicious", "reasons": []}]
+    details = storyline_summary.ioc_details(state)
+    assert details[("ip", "8.8.8.8")]["portal"]["label"] == "malicious"
+    assert details[("ip", "8.8.8.8")]["score"] == 30
+    assert details[("dns", "x.local")]["portal"] == "not sent: internal name"
+    assert details[("dns", "a.example")]["portal"] == "not requested"
 
 
 def test_timeline_dark_option_uses_light_text():

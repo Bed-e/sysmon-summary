@@ -6,16 +6,15 @@ from filters import (
     is_dns_internal,
     is_ip_in_shared_range,
     is_ip_not_public,
+    list_iocs,
     load_config,
     load_list,
-    skip_reason,
-    split_iocs,
+    not_enrichable_reason,
 )
 
 CONFIG = {
     "ranges": [ipaddress.ip_network("104.16.0.0/13")],
     "ad_domains": ["corp.example.com"],
-    "trusted_paths": [],
     "well_known": [],
 }
 
@@ -77,32 +76,31 @@ def test_public_name_is_not_internal():
     assert not is_dns_internal("example.com", [])
 
 
-# ---- skip_reason / split_iocs ----
+# ---- not_enrichable_reason / list_iocs ----
 
-def test_skip_reason_codes():
-    assert skip_reason("ip", "10.0.0.1", CONFIG) == "ip_not_public"
-    assert skip_reason("ip", "104.18.5.5", CONFIG) == "ip_known_shared_range"
-    assert skip_reason("dns", "x.local", CONFIG) == "dns_internal"
-    assert skip_reason("ip", "8.8.8.8", CONFIG) is None
-    assert skip_reason("dns", "example.com", CONFIG) is None
+def test_not_enrichable_reason_codes():
+    assert not_enrichable_reason("ip", "10.0.0.1", CONFIG) == "ip_not_public"
+    assert not_enrichable_reason("ip", "104.18.5.5", CONFIG) == "ip_known_shared_range"
+    assert not_enrichable_reason("dns", "x.local", CONFIG) == "dns_internal"
+    assert not_enrichable_reason("ip", "8.8.8.8", CONFIG) == ""
+    assert not_enrichable_reason("dns", "example.com", CONFIG) == ""
 
 
-def test_hashes_are_never_skipped():
+def test_hashes_are_always_enrichable():
     iocs = {"ip": {}, "dns": {}, "hash": {"a" * 64: {"images": ["C:\\Windows\\System32\\x.exe"]}}}
-    to_rank, skipped = split_iocs(iocs, CONFIG)
-    assert len(to_rank) == 1 and skipped == []
+    assert list_iocs(iocs, CONFIG)[0]["not_enrichable"] == ""
 
 
-def test_split_iocs_separates_and_keeps_reason():
+def test_list_iocs_keeps_every_ioc_and_tags_it():
     iocs = {
         "ip": {"10.0.0.1": {"count": 1}, "8.8.8.8": {"count": 2}},
         "dns": {"x.local": {"count": 1}, "example.com": {"count": 1}},
         "hash": {},
     }
-    to_rank, skipped = split_iocs(iocs, CONFIG)
-    assert [i["value"] for i in to_rank] == ["8.8.8.8", "example.com"]
-    assert {(i["value"], i["reason"]) for i in skipped} == {
-        ("10.0.0.1", "ip_not_public"), ("x.local", "dns_internal")}
+    items = list_iocs(iocs, CONFIG)
+    assert [(i["value"], i["not_enrichable"]) for i in items] == [
+        ("10.0.0.1", "ip_not_public"), ("8.8.8.8", ""),
+        ("x.local", "dns_internal"), ("example.com", "")]
 
 
 # ---- loading lists ----

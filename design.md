@@ -70,7 +70,9 @@ Weights, thresholds and word lists are named constants in `scoring/config.py`. K
 - A root is a process whose parent is missing from the dump (it started before the capture). Its parent's image name is shown as a note.
 - Portal answers **mark** a chain (a badge on the IOC and a "portal hit" count on the card). They never change its score or rank.
 
-Output: `{"table": {guid: process entry}, "chains": [{root, score, title_finding, guids, flagged}], "other": [root guid, ...]}`.
+Output: `{"table": {guid: process entry}, "chains": [{root, score, title_finding, guids, flagged}], "other": [root guid, ...], "events_without_guid": n}`. Each process entry lists the IOCs it touched as `(type, value)` and its `dropped_by` writer.
+
+Chains are built **once** at upload. Portal answers are never stored in them: the page looks each IOC's answer up by `(type, value)` when it draws, so enrichment never rebuilds a chain.
 
 ## 6. IOCs and enrichability (step 6)
 
@@ -152,7 +154,7 @@ The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / r
 | `web/config.py`, `web/theme.py` | constants, columns, colours; theme and header |
 | `data/*.txt` | shared ranges, AD domains, well-known names, API limits |
 
-*Previously* `main.py` (command line) and `report.py` (static HTML) existed. They are removed in R4; the web app is the only interface.
+*Previously* `main.py` (command line) and `report.py` (static HTML) existed. They were removed in R2; the web app is the only interface.
 
 ## 10. Decisions
 
@@ -178,6 +180,6 @@ Each milestone is on its own branch. Bed-e opens the pull requests.
 
 - **R0 Design.** This file.
 - **R1 Findings.** `scoring/` produces findings with kind and subject, adds the enumeration burst and per-process network findings, and builds `process_scores` once. IOC rank by split inheritance is done here too (it had to change with the findings). Tests rewritten to findings.
-- **R2 Chains and IOC rank.** `storylines.py` builds chains (flagged trees, title finding, dropped-by, other activity). IOC rank uses split inheritance. `filters.py` returns the enrichability tag.
+- **R2 Chains and enrichability.** `storylines.py` builds chains once (flagged trees, title finding, dropped-by, other activity). `filters.py` tags every IOC instead of splitting them off, and `enrich_one` refuses tagged IOCs. `main.py`, `report.py` and the cap were removed here, ahead of R4. The current tabs were only switched to the new data.
 - **R3 Web.** Queue and progress bar, Chains tab, IOCs reason column, Overview verdict, Stats tab. Remove Enrich next N, the warning dialog and the Skipped tab.
-- **R4 Cleanup.** Delete `main.py`, `report.py` and their tests; final pass on this file.
+- **R4 Cleanup.** Final pass on this file and on leftover names (for example `storylines.py` and the Storylines tab module, once R3 has replaced them).

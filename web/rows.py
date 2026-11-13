@@ -2,7 +2,7 @@
 the tables show, plus the small text helpers those tables use.
 """
 
-from web.config import N_CHOICES
+from web.config import N_CHOICES, NOT_ENRICHABLE_TEXT
 from web.reasons import portal_text, short_why
 
 
@@ -15,15 +15,18 @@ def make_ioc_rows(ranked, results):
     portal, action}, one per ranked IOC, in rank order. why is the short
     text; full_why holds every original reason (shown on hover). action is
     "Look up" when not requested, "Retry" when the lookup failed, else "".
+    An IOC tagged not_enrichable shows the plain reason (for example "not
+    sent: internal name") and no button.
     Used by: build_ioc_rows (the grid draws the first rows).
     """
-    answers = {}
-    for result in results:
-        answers[(result["type"], result["value"])] = result
+    answers = answers_by_ioc(results)
     rows = []
     for rank, item in enumerate(ranked, 1):
         portal = answers.get((item["type"], item["value"]), "not requested")
-        if not isinstance(portal, dict):
+        if item["not_enrichable"]:
+            portal = NOT_ENRICHABLE_TEXT.get(item["not_enrichable"], "not sent")
+            action = ""
+        elif not isinstance(portal, dict):
             action = "Look up"
         elif portal["status"] == "not_enriched":
             action = "Retry"
@@ -36,28 +39,46 @@ def make_ioc_rows(ranked, results):
     return rows
 
 
-def make_skipped_rows(skipped):
-    """Build the rows of the skipped-IOC audit table.
+def answers_by_ioc(results):
+    """Index the portal answers by IOC.
 
-    Input: skipped from filters.split_iocs (type, value, reason, record).
-    Output: a list of dicts {reason, type, value, count} sorted by reason,
-    type, value, so the analyst can audit the filter (design.md section 9,
-    rule 4). Used by: build_skipped_tab.
+    Input: results, the portal answers so far (state["results"], copied by
+    the caller).
+    Output: {(type, value): common-shape dict}.
+    Used by: make_ioc_rows and web.storyline_summary.ioc_details.
     """
+    answers = {}
+    for result in results:
+        answers[(result["type"], result["value"])] = result
+    return answers
+
+
+def make_skipped_rows(ranked):
+    """Build the rows of the not-enrichable audit table.
+
+    Input: ranked (scoring.rank_iocs); only items with a not_enrichable tag
+    are used.
+    Output: a list of dicts {reason, type, value, count} sorted by reason,
+    type, value, so the analyst can audit the rules. reason is the plain
+    text from NOT_ENRICHABLE_TEXT. Used by: build_skipped_tab.
+    """
+    blocked = [item for item in ranked if item["not_enrichable"]]
     rows = []
-    for item in sorted(skipped, key=lambda s: (s["reason"], s["type"], s["value"])):
-        rows.append({"reason": item["reason"], "type": item["type"],
-                     "value": item["value"], "count": item["record"]["count"]})
+    for item in sorted(blocked, key=lambda s: (s["not_enrichable"], s["type"], s["value"])):
+        rows.append({"reason": NOT_ENRICHABLE_TEXT.get(item["not_enrichable"],
+                                                       item["not_enrichable"]),
+                     "type": item["type"], "value": item["value"],
+                     "count": item["record"]["count"]})
     return rows
 
 
 def make_counts_rows(state, results):
     """Build the counts shown on the Overview tab.
 
-    Input: state (an UPLOADS entry: iocs, skipped, ranked); results, the
-    portal answers so far (one per IOC: store_result never duplicates).
-    Output: a list of {item, value}: IOCs found, skipped (never sent
-    anywhere), ranked, looked up, lookup failed, and not requested.
+    Input: state (an UPLOADS entry: iocs, ranked); results, the portal
+    answers so far (one per IOC: store_result never duplicates).
+    Output: a list of {item, value}: IOCs found, not enrichable (never sent
+    anywhere), enrichable, looked up, lookup failed, and not requested.
     Used by: build_overview_tab and refresh_view.
     """
     iocs = state["iocs"]
@@ -69,15 +90,16 @@ def make_counts_rows(state, results):
             failed += 1
         else:
             looked_up += 1
-    ranked = len(state["ranked"])
+    blocked = len([item for item in state["ranked"] if item["not_enrichable"]])
+    enrichable = len(state["ranked"]) - blocked
     pairs = [
         ("IOCs found (%d IPs, %d DNS names, %d hashes)"
          % (len(iocs["ip"]), len(iocs["dns"]), len(iocs["hash"])), found),
-        ("Skipped by the filter (never sent anywhere)", len(state["skipped"])),
-        ("Ranked locally", ranked),
+        ("Not enrichable (never sent anywhere)", blocked),
+        ("Enrichable", enrichable),
         ("Looked up on the portals", looked_up),
         ("Lookup failed (not enriched)", failed),
-        ("Not requested", max(ranked - len(results), 0)),
+        ("Not requested", max(enrichable - len(results), 0)),
     ]
     return [{"item": label, "value": str(value)} for label, value in pairs]
 

@@ -1,7 +1,8 @@
-"""Step 5: ask the three local portals about the highest-ranked IOCs.
+"""Step 7 (optional): ask the three local portals about one IOC.
 
-One call per IOC, in rank order, in a plain for loop, up to a cap. This is
-the only module that knows the three portal contracts (design.md section 6).
+One call per IOC; the web app's background thread calls enrich_one in a
+plain loop. This is the only module that knows the three portal contracts
+(design.md section 7).
 
 Every answer, good or bad, becomes the same dict:
     {"type": "ip", "value": "8.8.8.8",
@@ -38,8 +39,6 @@ URL_PATHS = {
 # (about 24 s worst case); the DNS portal can take about a minute.
 TIMEOUTS = {"ip": 30, "hash": 30, "dns": 70}
 
-DEFAULT_CAP = 25
-
 
 def load_portal_urls():
     """Read the three portal base URLs from the environment.
@@ -47,7 +46,7 @@ def load_portal_urls():
     Input: nothing (reads IP_PORTAL_URL, HASH_PORTAL_URL, DNS_PORTAL_URL).
     Output: {"ip": url, "hash": url, "dns": url}. A variable that is not set
     gives "" and that type will be shown as not enriched.
-    Used by: main.py once at start-up, then passed to enrich_ranked.
+    Used by: web.actions, before each enrichment run.
     """
     urls = {}
     for ioc_type, variable in URL_VARIABLES.items():
@@ -117,7 +116,7 @@ def not_enriched(item, reason):
 
     Input: item (ranked dict) and reason (text, e.g. "portal returned 503").
     Output: common-shape dict with score None, label None, status
-    "not_enriched". Used by: enrich_one and enrich_ranked.
+    "not_enriched". Used by: enrich_one and web.enrich_jobs.
     """
     return make_result(item, None, None, [reason], "not_enriched")
 
@@ -241,9 +240,13 @@ def enrich_one(item, urls):
     load_portal_urls. Output: common-shape dict. Not-enriched reasons:
     portal not configured, timeout or connection error, HTTP 400 (bad
     input), 503 (every source failed), any other status, or an answer that
-    is not JSON.
-    Used by: enrich_ranked.
+    is not JSON. An item tagged not_enrichable (private IP, shared range,
+    internal DNS name) is answered "not sent: <reason code>" without any
+    call: the privacy check right before every lookup.
+    Used by: web.enrich_jobs.run_enrichment.
     """
+    if item.get("not_enrichable"):
+        return not_enriched(item, "not sent: %s" % item["not_enrichable"])
     ioc_type = item["type"]
     url = build_request_url(ioc_type, item["value"], urls)
     if url is None:
@@ -261,22 +264,3 @@ def enrich_one(item, urls):
     if not isinstance(body, dict):
         return not_enriched(item, "portal answer was not JSON")
     return NORMALIZERS[ioc_type](item, body)
-
-
-def enrich_ranked(ranked, urls, cap=DEFAULT_CAP):
-    """Look up the ranked IOCs one at a time, highest local score first.
-
-    Input: ranked, the list from scoring.rank_iocs (already in order);
-    urls from load_portal_urls; cap, the most lookups to make this run.
-    Output: a list of common-shape dicts in the same order as ranked. IOCs
-    past the cap are "not_enriched" with the reason "over the cap of N", so
-    they stay visible. A plain for loop: no threads.
-    Used by: main.py, and later the report (M4).
-    """
-    results = []
-    for position, item in enumerate(ranked):
-        if position >= cap:
-            results.append(not_enriched(item, "over the cap of %d lookups" % cap))
-        else:
-            results.append(enrich_one(item, urls))
-    return results
