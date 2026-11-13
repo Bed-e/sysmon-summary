@@ -36,13 +36,27 @@ UPLOAD_ERRORS = {
     "read": "Could not read that file.",
 }
 
+# The upload form is a fixed string (nothing from the user goes into it).
+# Parsing a dump takes about a minute per 2 MB (python-evtx), and the page
+# stays on this form until the server answers. So the small onsubmit handler
+# (the app's only JavaScript) disables the button, so a second press cannot
+# start a second parse, and shows the "please wait" line. "required" stops
+# an empty submit in the browser; the server still checks (error "none").
 UPLOAD_FORM = (
     '<form class="upload-form" method="post" action="/upload" '
-    'enctype="multipart/form-data">'
+    'enctype="multipart/form-data" onsubmit="'
+    "var b = this.querySelector('button');"
+    "if (b.disabled) { return false; }"
+    "b.disabled = true; b.textContent = 'Reading and ranking…';"
+    "this.querySelector('.upload-wait').hidden = false;"
+    '">'
     '<label class="upload-drop">'
     '<span class="upload-drop-title">Choose a Sysmon .evtx file</span>'
-    '<input type="file" name="file" accept=".evtx"></label>'
-    '<button class="upload-button" type="submit">Upload and rank</button></form>'
+    '<input type="file" name="file" accept=".evtx" required></label>'
+    '<button class="upload-button" type="submit">Upload and rank</button>'
+    '<p class="upload-wait" hidden>This can take about a minute per 2 MB of log. '
+    'Please keep this page open; the report opens by itself when it is ready.</p>'
+    '</form>'
 )
 
 # The IOC table is a plain grid (so each row can hold a Look up button).
