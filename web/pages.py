@@ -39,12 +39,16 @@ def upload_page(error: str = ""):
     Output: draws the page. Nothing is sent to any portal by uploading.
     """
     page_setup()
-    ui.label("Upload a Sysmon .evtx dump. It is read, filtered and ranked on "
-             "this machine. No portal is called until you press "
-             "\"Enrich next N\" or a Look up button on the report page.")
-    if error in UPLOAD_ERRORS:
-        ui.label(UPLOAD_ERRORS[error]).classes("app-bad")
-    ui.html(UPLOAD_FORM, sanitize=False)
+    with ui.column().classes("app-card app-narrow"):
+        ui.label("Upload a Sysmon dump").classes("app-title")
+        ui.label("The .evtx file is read, filtered and ranked on this "
+                 "machine.").classes("app-muted")
+        ui.label("Nothing is sent to any portal until you press \"Enrich "
+                 "next N\" or a Look up button on the report page."
+                 ).classes("app-muted")
+        if error in UPLOAD_ERRORS:
+            ui.label(UPLOAD_ERRORS[error]).classes("app-error")
+        ui.html(UPLOAD_FORM, sanitize=False).classes("w-full")
 
 
 def report_page(upload_id: str):
@@ -58,30 +62,34 @@ def report_page(upload_id: str):
     theme = page_setup()
     state = UPLOADS.get(upload_id)
     if state is None:
-        ui.label("That report does not exist (the server may have "
-                 "restarted).").classes("app-bad")
-        ui.link("Upload again", "/")
+        with ui.column().classes("app-card app-narrow"):
+            ui.label("That report does not exist (the server may have "
+                     "restarted).").classes("app-bad")
+            ui.link("Upload again", "/")
         return
     view = {"state": state, "upload_id": upload_id,
             "process_scores": build_process_scores(state["events"]),
             "seen": (state["version"], state["run"]), "theme": theme}
-    ui.label("File: " + state["name"])
-    with ui.tabs() as tabs:
-        overview = ui.tab("Overview")
-        iocs = ui.tab("IOCs")
-        stories = ui.tab("Storylines")
-        timeline = ui.tab("Timeline")
-        skipped = ui.tab("Skipped")
-    with ui.tab_panels(tabs, value=overview).classes("w-full"):
-        with ui.tab_panel(overview):
-            build_overview_tab(view)
-        with ui.tab_panel(iocs):
-            build_ioc_tab(view)
-        with ui.tab_panel(stories):
-            build_storylines_tab(view)
-        with ui.tab_panel(timeline):
-            build_timeline_tab(view)
-        with ui.tab_panel(skipped):
-            build_skipped_tab(view)
+    with ui.row().classes("app-card items-center justify-between"):
+        ui.label("File: " + state["name"]).classes("app-title")
+        ui.link("Upload another file", "/")
+    with ui.column().classes("app-card"):
+        with ui.tabs().classes("w-full") as tabs:
+            overview = ui.tab("Overview")
+            iocs = ui.tab("IOCs")
+            stories = ui.tab("Storylines")
+            timeline = ui.tab("Timeline")
+            skipped = ui.tab("Skipped")
+        with ui.tab_panels(tabs, value=overview).classes("w-full"):
+            with ui.tab_panel(overview).classes("p-0 gap-4"):
+                build_overview_tab(view)
+            with ui.tab_panel(iocs).classes("p-0 gap-4"):
+                build_ioc_tab(view)
+            with ui.tab_panel(stories).classes("p-0 gap-4"):
+                build_storylines_tab(view)
+            with ui.tab_panel(timeline).classes("p-0 gap-4"):
+                build_timeline_tab(view)
+            with ui.tab_panel(skipped).classes("p-0 gap-4"):
+                build_skipped_tab(view)
     view["timer"] = ui.timer(REFRESH_SECONDS, lambda: refresh_view(view),
                              active=(state["run"] == "running"))

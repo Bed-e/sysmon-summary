@@ -433,3 +433,10 @@ def test_resolve_dark():
     assert resolve_dark("system", True) is True
     assert resolve_dark("system", False) is False
     assert resolve_dark("junk", True) is True
+
+
+def test_score_level_groups_for_badges():
+    assert timeline_data.score_level(0) == "normal"
+    assert timeline_data.score_level(1) == "flagged"
+    assert timeline_data.score_level(config.HIGH_SCORE - 1) == "flagged"
+    assert timeline_data.score_level(config.HIGH_SCORE) == "high"

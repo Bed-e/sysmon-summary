@@ -1,317 +1,184 @@
 # Sysmon Triage Tool: design
 
-Owner: Bed-e. This is the design before any code (milestone M0).
+Owner: Bed-e.
 
-## 1. Purpose and scope
+## 1. Purpose
 
-A SOC analyst gives the tool a Sysmon `.evtx` dump. The tool pulls out the IOCs (IP addresses, DNS names, file hashes), skips the ones that cannot be interesting, ranks the rest, asks three local enrichment APIs about the highest-ranked ones, and shows the analyst a ranked, explained view of what happened on the machine.
+A SOC analyst uploads a Sysmon `.evtx` dump. The tool finds the **attack chains** in it (the process trees where something suspicious happened) and shows them, the most suspicious first, each titled by what made it suspicious. Enriching the IOCs inside a chain with the three local portals is **optional** and only happens when the analyst asks.
 
-It is a **triage helper, not a verdict engine**. It never says "clean" or "safe". An IOC with a low score or one that was skipped means only "nothing here pointed at it". The score and the reasons are always shown together.
+It is a triage helper. Its verdicts are always "likely" ("Likely safe", "Suspicious", "Likely compromised"), and every verdict and score is shown with its reason. It never says "clean" or "safe" on its own.
 
-**Out of scope for v1**
+*Previously* the tool was built around an API queue: rank IOCs, then enrich the top N, then build storylines. Chains are now the main output, and the APIs only add to what is already there.
 
-- Live log collection (the input is a saved dump)
-- A database, accounts or login
-- Uploading any file to any service. Only IOC values (an IP, a DNS name, a hash) leave the tool, and only to the three local APIs.
-- IPv6 (the IP API accepts IPv4 only)
-- Other IOC types as enrichment targets (URLs, registry keys, mutexes). No portal can look them up. Registry writes are still read and used as a local ranking signal (section 5).
-- Async code and parallel API calls (see sections 2 and 10). One background thread is allowed in M5 only, to keep the web page responsive during lookups (section 7).
+**Out of scope:** live log collection, a database or accounts, uploading files anywhere (only IOC values go out, and only to the three local portals), IPv6 enrichment, enriching other IOC types (URLs, registry keys).
 
 ## 2. Ground rules for the code
 
-These rules apply to every file and every milestone.
+1. Plain functions, dicts, lists, sets and strings. No classes unless the standard library forces one.
+2. No library unless it is needed. Allowed: the standard library, `requests`, `python-dotenv`, `python-evtx`, and NiceGUI (with its FastAPI and uvicorn). Anything else needs Bed-e's approval.
+3. Ask Bed-e before using anything above beginner-intermediate level (classes, `async`, new threads, decorators, complex generators or regex, metaprogramming).
+4. If a function is hard to explain in a sentence or two, split or simplify it.
+5. Data passed between steps is a plain dict or a list of dicts.
+6. The design comes from the Sysmon schema, the portal contracts and triage practice, never from a particular sample dump. Missing fields are "unknown", never an error and never evidence.
 
-1. **Function-based Python as much as possible.** Plain functions, dicts, lists, tuples, sets and strings. No classes unless the standard library forces one on us.
-2. **No library that is not explicitly necessary for functionality.** Allowed: the standard library, `requests` (the three existing portals use it), `python-dotenv` (reads the portal URLs from a gitignored `.env`, approved by Bed-e) and `python-evtx` (a binary `.evtx` file cannot be read without it). NiceGUI (with the FastAPI and uvicorn it brings) is allowed from milestone M5 only, approved by Bed-e for the tabbed web page: it gives tabs, tables with Show more, dialogs, timers and upload from plain Python functions. Anything else needs Bed-e's approval first.
-3. **Ask Bed-e before any decision that needs structures or patterns above beginner-intermediate level.** Examples: classes and dataclasses, `async`, threads and thread pools, decorators, generators beyond a simple loop, type-hint tricks, regex that is hard to read, and metaprogramming. Claude stops and asks. It does not decide on its own, even if the choice looks better.
-4. If a function is hard to explain in a sentence or two, it is split or simplified.
-5. Data passed between steps is a plain dict or a list of dicts, so it can be printed and read.
+## 3. Pipeline
 
-
-## 3. Design independence from sample data
-
-The design comes from the Sysmon event schema, the three API contracts and general triage practice. **It must not be shaped by any particular dump.**
-
-- The tool must work on dumps with any mix of event IDs. Fields that are missing (for example the signature fields that only some events carry) are treated as "unknown", never as an error and never as a reason to trust or distrust an IOC.
-- Tests may assert what the tool does with a sample, but a rule is added to the design only because it is justified on its own, in this file.
-
-## 4. Pipeline
-
-Each step is one plain function or a small group of functions in one module. Each step takes the output of the previous one.
+Each step has one output, and the next step reads it. Data flows one way.
 
 ```
 .evtx file
-  1 parse        -> list of event dicts (Sysmon IDs 1, 3, 11, 12, 13, 14, 22; every other ID is counted and dropped)
-  2 collect      -> unique IOCs, each with counts, first/last seen, hosts, ProcessGuids
-  3 filter       -> split into "to rank" and "skipped (reason code)"
-  4 score        -> a local risk number and reasons for each IOC that was not skipped
-  5 enrich       -> ask the APIs, one IOC at a time, highest local score first, up to a cap
-  6 storylines   -> group events by ProcessGuid / ParentProcessGuid into process chains
-  7 report       -> one HTML file (M4), later a web page (M5)
+  1 parse        parse.read_events      -> events: list of event dicts (IDs 1, 3, 11, 12, 13, 14, 22; others counted and dropped)
+  2 collect      iocs.collect_iocs      -> iocs: {ip, dns, hash} -> {value: record}  (facts only, no scores)
+  3 findings     scoring                -> findings: list of {guid, points, reason, kind, subject}
+  4 processes    scoring                -> process_scores: {guid: {image, score, findings}}  (worked out once)
+  5 chains       storylines             -> {table, chains, other}
+  6 IOC ranking  scoring + filters      -> ranked IOC rows, each with an enrichability tag
+  7 enrich       enrich + web queue     -> results: {(type, value): common-shape answer}   (optional)
+  8 show         web/                   -> tabs: Overview, Chains, IOCs, Timeline, Stats
 ```
 
-`ProcessGuid` is the key that ties a process's creation (event 1), its connections (event 3), its DNS queries (event 22) and its files (event 11) together. The storylines step depends on it.
+`ProcessGuid` ties a process's creation (1), connections (3), DNS queries (22), files (11) and registry writes (12–14) together. Every step from 3 onward depends on it.
 
-## 5. Local filter rules (steps 3 and 4)
+Steps 1–6 run when the dump is uploaded and call no API. Step 7 runs only when the analyst presses a Look up or Enrich button, and it never changes steps 3–6.
 
-**Two different things happen locally.** *Skipping* removes an IOC from the API queue because it cannot produce a useful answer. *Ranking* only decides the order in which the remaining IOCs are looked up.
+## 4. Findings (steps 3 and 4)
 
-### Skip rules (each skip keeps a reason code)
+A **finding** is one local clue about one process:
 
-| IOC | Skipped when | Reason code |
+```
+{"guid": "{...}", "points": 25, "reason": "document app started a program (...)",
+ "kind": "process" | "subject", "subject": ("ip", "1.2.3.4") or None}
+```
+
+- **Process findings** are about the process itself: user-writable path (`Temp`, `Downloads`, `Users`), double extension (`.pdf.exe`), odd parent pair (a document viewer starting a program, a script host from a user path), registry autorun write (`\CurrentVersion\Run`, Winlogon shell or userinit, an IFEO `Debugger`), a burst of failed DNS lookups, the **enumeration burst**, and the trusted-path negative (every copy runs from a protected system path; small minus, weak evidence).
+- **Subject findings** are about one IOC the process touched, worked out per process:
+  - IP: the connection comes from an unexpected process (not a browser or known updater), uses an unusual port (not 80, 443 or 53), or has regular timing (possible beaconing).
+  - DNS: very long or high-entropy label, or a close lookalike of a well-known name.
+  - Hash: an autorun registry value written by *another* process contains this file's full path (lowercased substring; a bare filename never matches).
+- **Enumeration burst:** `ENUM_MIN_COUNT` or more discovery commands (`whoami`, `ipconfig`, `net`/`net1`, `systeminfo`, `nltest`, `tasklist`, `netstat`, `quser`, `arp`, `route`, `hostname`, ...) started by the **same parent** within `ENUM_WINDOW_SECONDS`. The points go to the parent (the shell doing the recon).
+- **Process score** = the sum of its findings. It is worked out once, kept in the upload's state, and read by the chains, the IOC table and the timeline.
+
+Weights, thresholds and word lists are named constants in `scoring/config.py`. Known limit: paths with environment variables, quotes or arguments can be missed. A miss means "nothing pointed at it", never "no persistence".
+
+## 5. Chains (step 5)
+
+- A **flagged** process has a score above 0. A **chain** is one process tree (a root and everything it started) with at least one flagged process. Trees with nothing flagged go in a collapsed **Other activity** list.
+- **Title:** the strongest finding in the tree, its process and its subject, e.g. `invoice.pdf.exe → C2 to 1.2.3.4`. Not the root process. Other flagged branches are shown inside the same card.
+- **Shape:** flagged processes show their findings and activity. Unflagged ancestors and descendants are shown as plain lines with no detail, so the whole flow is visible.
+- **Rank:** the highest process score in the tree, then larger tree, then earliest start.
+- **Dropped by:** if a process's image path matches a file another process created (event 11), the chain shows "file written by chrome.exe at 10:02". Trees are not merged.
+- A root is a process whose parent is missing from the dump (it started before the capture). Its parent's image name is shown as a note.
+- Portal answers **mark** a chain (a badge on the IOC and a "portal hit" count on the card). They never change its score or rank.
+
+Output: `{"table": {guid: process entry}, "chains": [{root, score, title_finding, guids, flagged}], "other": [root guid, ...]}`.
+
+## 6. IOCs and enrichability (step 6)
+
+**IOC rank (split inheritance).** An IOC has no scoring code of its own. Its score is:
+- the subject findings about this IOC, plus
+- the *process* findings of the highest-scoring process that touched it.
+
+So a lookalike domain ranks high, but chrome's other 300 domains do not inherit that finding. Ties: more sightings, then earliest first seen.
+
+**Enrichability tag.** Every IOC stays visible. Each gets `enrichable: True`, or a reason it is not sent:
+
+| Reason | IOC | When |
 |---|---|---|
-| IP | private, loopback, link-local, multicast, broadcast, CGNAT, reserved | `ip_not_public` |
-| IP | inside a published CDN or cloud range kept in a plain text list file | `ip_known_shared_range` |
-| DNS | ends in `.local`, `.lan`, `.internal`, `.home`, `.arpa`, is a single label, or is on our own AD domain list | `dns_internal` |
+| nothing to gain | IP | private, loopback, link-local, multicast, broadcast, CGNAT, reserved (`ip_not_public`) |
+| nothing to gain | IP | inside a CDN or cloud range in `data/shared_ranges.txt` (`ip_known_shared_range`) |
+| must not send | DNS | `.local`, `.lan`, `.internal`, `.home`, `.arpa`, a single label, or in `data/ad_domains.txt` (`dns_internal`) |
 
-`dns_internal` is a privacy rule, not only a speed rule. The DNS portal's design says names are sent to outside services and internal names must never be typed in. The IP portal likewise never sends private addresses out. This tool enforces both **before** any API call.
+"Must not send" is a privacy rule from the IP and DNS portals' own designs, and it is checked again right before any call. Hashes are always enrichable.
 
-Hashes are never skipped. A trusted path (the Windows system directories and `Program Files`, kept in one configurable list) is weak evidence, because a path can be faked and a replaced system binary is a real attack. It is a small negative ranking signal instead (see below).
+*Previously* these were "skip" rules that removed IOCs before ranking, and the skipped ones had their own tab.
 
-### Ranking signals (add points, each with a stated reason)
+## 7. Enrichment (step 7, optional)
 
-- File or process in a user-writable path (`Temp`, `Downloads`, `Users`)
-- Double extension such as `.mp4.exe`
-- Odd parent-to-child pair (a document viewer starting an `.exe`; `explorer.exe` starting something from `Temp`)
-- Outbound connection from an unexpected process (not a browser or known updater), or an unusual port (anything other than 80, 443 or 53)
-- DNS name with a very long or high-entropy label, a burst of failed lookups (`QueryStatus` not 0) from one process, or a close lookalike of a name on a small well-known list
-- Regular timing between connections to the same destination (possible beaconing)
-- **Persistence by registry write** (events 12, 13, 14): a process writes an autorun location such as a `\CurrentVersion\Run` key. Points are added to the writing process (matched by `ProcessGuid`).
-- **Persistence reference to a file**: for each hash IOC, a registry write to an autorun location (the same test as the persistence-by-registry-write signal) whose `Details` or `TargetObject` contains the file's full path (lowercased, plain substring check). A path that appears in some other key, such as a Windows application inventory entry, does not count, and neither does a write made by the file's own process, which the process-level signal already covers. Points are added to that hash. This runs locally on every hash **before** any API call, so a new file with no reputation history still moves up the queue and the cap is more likely to reach it. After enrichment, the report shows the portal's verdict and the persistence hit together.
-- **Trusted path (negative)**: every file path seen for a hash is inside a protected system location. A small number of points is taken off. It lowers the order only; it never removes the hash from the queue and cannot cancel a strong signal.
+**What the analyst can send:**
+- **Look up / Retry** on an IOC row or an IOC inside a chain sends that one IOC.
+- **Enrich this chain** sends the enrichable IOCs touched by that chain's flagged processes.
 
-**Process-level signals** (odd parent pair, user-writable path, registry autorun write) are scored per `ProcessGuid`. Every IP, DNS name and hash that process touched inherits the full points, so a persistent or suspicious process pulls everything it did up the queue.
+**Queue.** One FIFO queue per upload, drained by one background thread, one lookup at a time (no parallel calls). A press while the thread is running adds to the queue. Anything already queued or answered is ignored, except a Retry, which replaces the old answer. A progress bar shows done out of queued. The browser sends only an IOC's row number or a chain's number; the server looks up only IOCs it collected itself.
 
-Known limits of the path check: values using environment variables (`%APPDATA%`), quotes or arguments can be missed. A bare filename is never matched on its own, because common names would give false hits. A miss is "nothing pointed at it", never "no persistence".
+**VirusTotal protection (hash lookups only).** Hash lookups are spaced to the per-minute limit. A daily count is kept in `data/hash_usage.txt` (gitignored). Once the daily budget is used up, a hash is answered "not enriched: daily VirusTotal budget reached" without a call. Limits live in `data/api_limits.txt` (default 4 a minute, 500 a day).
 
-The weights are placeholders kept as named constants at the top of one file, so they can be tuned.
+**Common shape.** `enrich.py` is the only file that knows the portal contracts. It turns each answer into `{type, value, score_0_to_100, label, reasons, status}`, where status is `enriched`, `partial` (some sources failed) or `not_enriched` (call failed, timed out, `503`, every source failed, `not_graded`, or a `400`, logged as `portal_rejected_input`). A failure is never shown as a low score. Portal scores are never averaged across types or merged into local scores. The portal's label is shown beside its number.
 
-## 6. The three enrichment APIs
+### Portal contracts
 
-All three run locally and are read-only for us. The base URLs come from configuration (environment variables), never from code. The tool holds no API keys, because each portal holds its own.
+Base URLs come from `.env`: `IP_PORTAL_URL`, `HASH_PORTAL_URL`, `DNS_PORTAL_URL`. No API keys are held here.
 
 | | IP portal | Hash portal | DNS portal |
 |---|---|---|---|
 | Call | `GET /api/ip/<ip>` | `GET /api/v1/hash/{hash}` | `GET /api/v1/domain/{name}` |
-| Input | IPv4 only | md5, sha1 or sha256 (32, 40 or 64 hex, lowercased) | a valid DNS name (not an IP or URL) |
-| Score | `verdict.score` 0 to 100, higher = more likely malicious | `verdict.score` 0 = safe to 100 = malicious | `assessment.average` 0 = definitely safe to 100 = definitely malware, plus a per-source `score` |
-| Label | `verdict.level`: `malicious`, `suspicious`, `no_known_bad`, `not_applicable` | `verdict.label`: `safe`, `suspicious`, `malicious` | `assessment.verdict`: `definitely_safe` ... `definitely_malware`, `not_graded` |
-| Reasons | `verdict.reasons` | `verdict.reasons` | each source's `score_reason`, and `assessment.verdict_note` |
-| Failure | `503` when every source failed; a single source failing is inside a `200` | always `200`; failed sources in `verdict.failed_sources` | always `200` for a valid name; failed sources have `status: error` and `score: null` |
-| Bad input | `400` | `400` | `400` |
-| Speed | sources are asked in sequence, up to about 24 seconds worst case | parallel inside the portal | sequential inside the portal; crt.sh alone can take about a minute |
-| Limits | AbuseIPDB free tier is 1,000 checks a day | VirusTotal free quota is small | RDAP about 10 requests per 10 seconds |
+| Input | IPv4 | md5 / sha1 / sha256, lowercase hex | a DNS name |
+| Score | `verdict.score` | `verdict.score` | `assessment.average` (may be `null`) |
+| Label | `verdict.level` | `verdict.label` | `assessment.verdict` |
+| Reasons | `verdict.reasons` | `verdict.reasons` | each source's `score_reason`, plus `assessment.verdict_note` |
+| `sources` | list of `{name, status}` | dict | dict |
+| Partial | a source `status: error` | `verdict.failed_sources` not empty | `sources_used < sources_total` |
+| Total failure | HTTP `503` | every source `error` | `verdict: not_graded` |
+| Not judged | `level: not_applicable` | none | `not_graded` |
+| Timeout used | 30 s | 15 s | 70 s (crt.sh can take a minute) |
 
-None of the APIs has a batch endpoint, so the tool makes one call per IOC. Each portal caches its own results.
+## 8. Web app
 
-### 6.1 Contract details
+NiceGUI. Uploading parses, finds and ranks locally; no portal is called. The state for each upload (events, iocs, process scores, chains, ranked IOCs, queue, results) lives in a module-level dict keyed by a random upload id. Only the background thread writes results. A NiceGUI timer updates the progress bar, badges and table while the queue is running.
 
-These were read from the code and test fixtures of the three portals (`enrichment-portal-simple`, `hash-enrich-2`, `ioc-simple-dns`). All three are read-only `GET` calls that return JSON. `enrich.py` is the only file that knows them.
+Tabs, in order:
 
-| | IP portal | Hash portal | DNS portal |
-|---|---|---|---|
-| Project | `enrichment-portal-simple` (Flask) | `hash-enrich-2` (FastAPI) | `ioc-simple-dns` (Flask) |
-| Default port | 5001 | 8000 | 8010 |
-| Config variable (in the portal's own clients) | `BACKEND_URL` (frontend), `PORTAL_URL` (MCP server) | `PORTAL_URL` | `BACKEND_URL` (no default) |
-| Health check | none | `GET /api/v1/health` | `GET /api/v1/health` |
-| Input cleaning done by the portal | strips spaces; IPv4 only | lowercases the hash | trims, lowercases, drops one trailing dot, converts to punycode |
-| Sources it asks | Shodan InternetDB, RDAP, AbuseIPDB | VirusTotal, MalwareBazaar, ThreatFox | Google DNS, RDAP, crt.sh |
-| Response header extras | none found | none found | `X-Cache-Age-<source>: <seconds>` for each cached source |
+1. **Overview:** the soft verdict and its one-line reason, then the top chains. The verdict comes from the highest chain score only, using the badge bands: 0 = **Likely safe**, 1–39 = **Suspicious**, 40+ = **Likely compromised**. Portal hits are shown but do not move the verdict.
+2. **Chains:** one card per chain (section 5) with its score badge, title, a one-line summary, the flagged processes and their findings, portal hits, the Enrich this chain button, and the process tree. Other activity is collapsed at the bottom. 10 at a time with Show more.
+3. **IOCs:** every IOC in rank order (section 6) with its why (grouped by process, full text on hover), the processes that touched it, its portal answer, and Look up / Retry. If it is not enrichable, the reason replaces the button.
+4. **Timeline:** one row per process in tree order, a bar from first to last event coloured by process score, dots per event type, and dashed parent-to-child links. A "Show" dropdown picks flagged processes and their parents (default), one chain, or all processes. A table of flagged processes sits under the chart.
+5. **Stats:** counts kept out of the way: events kept and dropped by ID, parse errors, IOCs found by type, IOCs not enrichable by reason, lookups done or failed, and events with no ProcessGuid.
 
-The variable names above are what the portals' own clients read. Two portals use the same name, so this tool needs its own three settings, one per portal (proposed names: `IP_PORTAL_URL`, `HASH_PORTAL_URL`, `DNS_PORTAL_URL`).
+The theme (Light / Dark / System, cards, score badges grey 0 / orange 1–39 / red 40+) is in `web/theme.py`.
 
-#### IP portal: `GET /api/ip/<ip>`
-
-Success `200`:
-
-```json
-{
-  "ip": "8.8.8.8",
-  "classification": {"category": "global", "explanation": null, "ip": "8.8.8.8"},
-  "verdict": {"level": "no_known_bad", "score": 0, "reasons": [], "summary": "..."},
-  "sources": [
-    {"name": "internetdb", "display_name": "...", "status": "ok",
-     "summary": {}, "raw": {}, "error": null}
-  ]
-}
-```
-
-- `verdict.level`: `malicious` (score 60 or more), `suspicious` (20 or more), `no_known_bad` (below 20), `not_applicable`. `score` is a whole number 0 to 100.
-- `not_applicable` is returned for private or reserved addresses (`classification.category` is not `global`). Its `score` is `0` but means **not judged**, never safe. All three sources are `skipped`. Our `ip_not_public` skip rule means the tool should never see this, but the converter must still handle it.
-- `sources` is a **list**. `name` is one of `internetdb`, `rdap`, `abuseipdb`. `status` is one of `ok`, `no_data`, `error`, `skipped`, `not_configured` (no AbuseIPDB key).
-- A missing or empty source adds points to the score ("undocumented is suspicious"), so a low-information IP is not shown as clean.
-- Errors, always `{"error": "<code>", "message": "<text>"}`:
-
-| Status | `error` code | Meaning |
-|---|---|---|
-| `400` | `invalid_ip` | not an IP address (hostnames, CIDR, URLs, hashes) |
-| `400` | `unsupported_ip_version` | IPv6 |
-| `503` | `sources_unavailable` | every source that was tried failed |
-| `500` | `internal_error` | a bug in the portal |
-
-#### Hash portal: `GET /api/v1/hash/{hash}`
-
-Success `200` (always, for a valid hash):
-
-```json
-{
-  "hash": "add97f...",
-  "hash_type": "sha256",
-  "sources": {
-    "virustotal":    {"status": "ok", "data": {}, "error": null},
-    "malwarebazaar": {"status": "ok", "data": {}, "error": null},
-    "threatfox":     {"status": "ok", "data": {}, "error": null}
-  },
-  "verdict": {"score": 90, "label": "malicious", "reasons": [], "failed_sources": []}
-}
-```
-
-- `hash_type`: `md5`, `sha1` or `sha256`, decided by length (32, 40, 64). Characters must be hex.
-- `sources` is a **dict keyed by source name**. `status` is one of `ok`, `not_found`, `error`. On `error`, `error` is a plain **string**; otherwise `null`.
-- `verdict.label`: `malicious` (score 70 or more), `suspicious` (30 to 69), `safe` (below 30). `score` is the highest score among the sources that know the hash.
-- A hash nobody knows scores `50` (`suspicious`) with a reason saying so. It is never `safe`.
-- `safe` needs VirusTotal to report at least 30 engines with no detection. If any source failed, a score below 30 is raised to `50` and the label is not `safe`.
-- `verdict.failed_sources` lists the sources that returned `error`.
-- The portal waits at most 12 seconds for all sources together. A slower source is reported as `status: error`, `error: "Took longer than 12 seconds"`.
-- Errors: `400` with `{"error": "Expected 32, 40 or 64 hex characters"}` (a single string, no code field). There is no `503`.
-
-#### DNS portal: `GET /api/v1/domain/{name}`
-
-Success `200` (always, for a valid name, even when every source failed):
-
-```json
-{
-  "ioc": {"type": "domain", "input": "Example.com.", "value": "example.com"},
-  "sources": {
-    "dns":   {"status": "ok", "data": {}, "score": 10, "score_reason": "..."},
-    "rdap":  {"status": "ok", "data": {}, "score": 10, "score_reason": "..."},
-    "crtsh": {"status": "error", "data": null,
-              "error": {"code": "timeout", "message": "..."}, "score": null, "score_reason": "..."}
-  },
-  "assessment": {
-    "score_min": 0, "score_max": 100, "average": 10,
-    "sources_used": 2, "sources_total": 3,
-    "verdict": "definitely_safe", "verdict_label": "Definitely safe", "verdict_note": null
-  }
-}
-```
-
-- `ioc.value` is the cleaned name that was actually looked up. Use it, not `input`.
-- `sources` is a **dict** with keys `dns`, `rdap`, `crtsh`. `status` is one of `ok`, `not_found`, `error`. On `error`, `error` is an **object** `{code, message}` (codes seen include `timeout` and `upstream_error`). `score` is `null` for an errored source, and that source is left out of the average.
-- `assessment.average` is the rounded mean of the scores that exist, or `null` when no source answered.
-- `assessment.verdict` bands by `average`: `definitely_safe` (0 to 30), `likely_safe` (31 to 45), `undetermined` (46 to 55), `likely_malware` (56 to 70), `definitely_malware` (71 to 100). `not_graded` when `average` is `null`.
-- When fewer than all sources scored, a `definitely_*` verdict is lowered to the matching `likely_*`, and `verdict_note` says why. `verdict_note` is `null` otherwise.
-- Errors, always `{"error": "<text>", "input": "<what was sent>"}`:
-
-| Status | Meaning |
-|---|---|
-| `400` | `not a valid DNS name: ...` (an IP address, a URL, a port, spaces, a single label, bad characters, longer than 253 characters) |
-| `404` | `not found` (wrong path) |
-| `405` | `method not allowed` |
-| `500` | `internal error` |
-
-#### Differences the converter must absorb
-
-| Point | IP | Hash | DNS |
-|---|---|---|---|
-| `sources` type | list of dicts with `name` | dict | dict |
-| Source error shape | string | string | object `{code, message}` |
-| Where the overall score lives | `verdict.score` | `verdict.score` | `assessment.average` (can be `null`) |
-| Where the label lives | `verdict.level` | `verdict.label` | `assessment.verdict` |
-| Reasons | `verdict.reasons` (list of text) | `verdict.reasons` (list of text) | each source's `score_reason`, plus `assessment.verdict_note` |
-| "Total failure" signal | HTTP `503` | none: look for every source `error` | none: `not_graded` and `average: null` |
-| Unknown IOC | `no_known_bad` or `suspicious` with points for missing data | `suspicious`, score 50 | per-source `not_found` |
-| Failed-source list | in the `sources[].status` | `verdict.failed_sources` | `sources_used` below `sources_total` |
-| "Not judged" signal | `level: not_applicable` | none | `verdict: not_graded` |
-
-**Mapping to the common shape** (section 6, "Combining the answers"). This mapping and the timeouts below are proposals made while writing this section, not facts from the portals, and are for Bed-e to review. `status` is one of `enriched`, `partial`, `not_enriched`:
-
-- `status: not_enriched` when the call failed (timeout, connection refused, `5xx`), when the IP portal returns `503`, when the hash portal reports every source as `error`, or when the DNS portal returns `not_graded`. `reasons` holds the cause. `score_0_to_100` is `null`.
-- `status: partial` when a portal answered but some sources failed (`verdict.failed_sources` not empty, or `sources_used` below `sources_total`).
-- `status: enriched` otherwise.
-- `label` is copied as given: `verdict.level`, `verdict.label` or `assessment.verdict`.
-- A `400` from any portal is a bug in our filters, not an IOC result. The tool logs it and marks the IOC `not_enriched` with reason `portal_rejected_input`.
-
-**Timeouts the tool must use.** A request timeout per portal, set above the portal's own worst case: IP at least 30 seconds, hash at least 15 seconds, DNS at least 70 seconds (crt.sh alone can take about a minute). The values are named constants in `enrich.py`.
-
-**Combining the answers**
-
-- A function converts each portal's answer into a common shape: `{type, value, score_0_to_100, label, reasons, status}`. This is the only place that knows the three contracts.
-- The scores are **policy numbers, not probabilities**, and the three portals score differently, so scores are never averaged across IOC types. The portal's own label is shown beside the number.
-- A lookup that failed, timed out or got a `503` is shown as **not enriched** with the reason. It is never shown as a low score.
-- The hash portal's `safe` needs VirusTotal to have checked the file. The tool shows the label as given.
-
-## 7. Output
-
-- **M4, static HTML file.** One self-contained `.html` file written with plain string building. It shows:
-  - process storylines ranked by a combined score: lineage, command lines, and the IPs, DNS names and hashes each process touched, with scores and reasons
-  - a table of skipped IOCs with reason codes, so the analyst can audit the filter
-  - how many IOCs were found, skipped, looked up and left un-enriched because of the cap
-  - a fixed note that the scores are not a verdict
-- **M5, NiceGUI web app.** The analyst uploads a dump in a browser and sees the same data in five tabs: Overview (counts and the enrich controls), IOCs (the ranked table), Storylines (the M4 process chains), Timeline (one row per process in tree order, children indented under their parent; a bar from each process's first to last event coloured by its local score; dots for its events coloured by event type; dashed lines linking a parent to each child it started. A "Show" dropdown picks flagged processes and their parents (the default), one of the top 20 storylines, or all processes. A table of flagged processes in order of first appearance sits under the chart) and Skipped (the filter audit). It reuses the same functions. The IOC table, the storylines and the skipped table show 10 rows first and a Show more button adds 10 more. The IOC table's "why" is a short, readable phrase per reason, grouped by process, with the full reasons on hover. Each storyline shows a one-line summary (processes, flagged processes, portal hits, network, files, registry writes, time span) and opens to the flagged processes, portal hits and a "Full details" block with the process tree.
-  - **No API is called by default.** Uploading a dump parses, filters and ranks it locally and shows the ranked table on the IOCs tab. Every IOC shows "not requested" in the portal column.
-  - **Enrich on demand.** A dropdown for N (5, 10, 25, 50, 100, all) and an "Enrich next N" button on the Overview tab. Each press sends the N highest-ranked IOCs that have not been tried yet, so pressing it twice with N=5 covers ranks 1-5, then 6-10. A failed lookup counts as tried. Each row of the IOC table also has a Look up button (Retry after a failure) that sends that one IOC. The browser sends only N or the row's rank number. Results from every run are kept; a retry replaces the earlier answer.
-  - **One background thread.** The button starts a single thread (approved by Bed-e, M5 only) that runs the same sequential `for` loop as M3, one lookup at a time, highest rank first. The thread exists only so the web request returns at once. Calls are still not parallel.
-  - **The page fills in as answers arrive, with no page reload.** While the thread runs, a NiceGUI timer (every 2 seconds) updates the status line, the counts and the portal column in place. When the thread finishes the timer stops and the storylines are rebuilt once so the answers appear inside them.
-  - **Shared state.** The ranked list, the results so far and the run state ("idle", "running", "done", "failed") live in a module-level dict keyed by an upload id. Only the thread writes results. The page only reads. The browser never sends IOC values back, so the server only ever looks up IOCs it ranked itself.
-  - **Failures stay visible.** A lookup that fails is shown as "not enriched" with the reason, as in M3. If the thread itself crashes, the run state becomes "failed" with the error text, and the page stops reloading.
-  - Only one enrich run per upload at a time. Pressing a button while one is running does nothing. The dropdown offers 5, 10, 25, 50, 100 and all; a value above the number of ranked IOCs is clamped. `--cap` and `DEFAULT_CAP` stay for the command line only.
-  - **Rate-limit protection, server side.** Only hash lookups reach VirusTotal, so only they are counted. When the top N holds hash lookups that would exceed the limits (time needed at the per-minute rate, share of the daily budget), the server shows a dialog with Send anyway and Cancel before any lookup starts. The thread spaces hash lookups to stay under the per-minute limit. The server keeps a daily count of hash lookups in a small gitignored file (`data/hash_usage.txt`), so a restart does not reset it. Once the daily budget is used up, a hash lookup is answered "not enriched: daily VirusTotal budget reached" without calling the portal (a hard stop, even after Send anyway). Every hash call is counted, even if the portal answered from its own cache, because the tool cannot see that.
-  - **Limits file.** The limits live in `data/api_limits.txt`, not in the code, so they can follow the analyst's real VirusTotal key. Defaults: 4 per minute and 500 per day (VirusTotal free public API; to be checked against the analyst's key, and a premium key has higher limits). The monthly limit is not tracked.
-
-## 8. Architecture and file layout
-
-Small flat modules, each with plain functions:
+## 9. File layout
 
 | File | Job |
 |---|---|
 | `parse.py` | read the `.evtx`, return event dicts |
 | `iocs.py` | collect and de-duplicate IOCs |
-| `filters.py` | skip rules |
-| `scoring/` | local ranking signals |
-| `enrich.py` | call the three APIs, convert answers to the common shape |
-| `storylines.py` | build process chains from `ProcessGuid` |
-| `report.py` | write the HTML |
-| `main.py` | command line: dump in, report out |
-| `web/app.py` | the NiceGUI entry point: registers the routes and starts the server (M5 only) |
-| `web/pages.py`, `web/upload.py`, `web/actions.py` | the two pages, the upload endpoint, and the buttons' actions (M5 only) |
-| `web/tabs/` | one module per tab: Overview, IOCs, Storylines, Timeline, Skipped (M5 only) |
-| `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | the enrich thread, the hash limits and daily count, and the shared state (M5 only) |
-| `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, table rows, storyline summaries and timeline data for the tabs; no UI code (M5 only) |
-| `web/config.py` | the web app's constants, columns and colours (M5 only) |
-| `web/theme.py` | page colours and card CSS (fixed strings only), the top bar and the Light / Dark / System toggle; the choice is kept per browser in `app.storage.user` (the `.nicegui/` folder, git-ignored) and the timeline chart is redrawn in matching colours (M5 only) |
-| `data/api_limits.txt` | per-minute and per-day hash lookup limits for the web app (M5 only) |
-| `data/hash_usage.txt` | today's hash lookup count, written by the web app, gitignored (M5 only) |
+| `scoring/` | findings, process scores, IOC rank (`config.py` holds every weight and list) |
+| `filters.py` | enrichability tag |
+| `storylines.py` | process table, tree, chains, dropped-by |
+| `enrich.py` | portal calls and conversion to the common shape |
+| `web/app.py`, `web/pages.py`, `web/upload.py` | entry point, pages, upload endpoint |
+| `web/actions.py`, `web/enrich_jobs.py`, `web/limits.py`, `web/runtime.py` | button actions, the queue and its thread, hash limits, shared state |
+| `web/tabs/` | one module per tab: overview, chains, iocs, timeline, stats |
+| `web/reasons.py`, `web/rows.py`, `web/storyline_summary.py`, `web/timeline_data.py`, `web/timeline_chart.py` | text, rows and chart data for the tabs; no UI code |
+| `web/config.py`, `web/theme.py` | constants, columns, colours; theme and header |
+| `data/*.txt` | shared ranges, AD domains, trusted paths, well-known names, API limits |
 
-## 9. Decisions, each with its reason
+*Previously* `main.py` (command line) and `report.py` (static HTML) existed. They are removed in R4; the web app is the only interface.
 
-1. **Function-based Python and few libraries.** The code must be fully explainable by its owner, and every dependency is something to learn and maintain.
-2. **`python-evtx` is used.** `.evtx` is a binary format. The only library-free option is a PowerShell export step, which is Windows-only and needs a manual second step.
-3. **Filter, then rank, instead of filter only.** Skipping removes only what cannot produce a useful answer. Ranking handles the rest, so a cap or a timeout still leaves the most suspicious IOCs checked first.
-4. **Skipped items are always visible with a reason.** Attackers abuse trusted binaries and domains, and the analyst must be able to audit the filter.
-5. **Local clues are part of the product.** The APIs score reputation only. They cannot see a double extension, a strange parent process or a lookalike domain.
-6. **A plain `for` loop for API calls, with a cap per run.** It is the easiest code to read. In M5 the same loop runs inside one background thread so the page stays responsive. The filter makes the list short. Parallelism is added only if measured to be too slow, and only with Bed-e's approval.
-7. **Process-centric output.** An analyst reads a story, "this process started that one and talked to that address", not a flat list of 5,000 rows.
-8. **Private and internal values never leave the machine.** This follows the rules of the IP and DNS portals.
-9. **Tests make no network calls, and samples are fixtures only.** They run against the sample dumps and saved API answers, to check the code works. The samples never decide the design (section 3). Failures that cannot be recorded (a timeout, a `503`) are simulated, and the test says so.
+## 10. Decisions
 
-## 10. Open questions (ask Bed-e before deciding)
+1. **Chains first, enrichment optional.** An analyst reads a story ("this file was downloaded, ran, and talked to that address"), not a ranked list of lookups. The APIs only add reputation to what the local evidence already shows.
+2. **Findings belong to processes.** One scoring pass, one score per process, and data that flows one way. Subject findings stop one bad IOC from dragging up everything else the same process touched.
+3. **Chains are titled by the strongest finding.** What made a tree suspicious matters more than its root (often `explorer.exe` or a browser).
+4. **Portal answers mark, never re-rank.** Local evidence decides the order. The ranking does not jump around while the analyst works.
+5. **Verdicts are "likely" and always show why.** A short verdict helps the analyst; the reason keeps it honest.
+6. **Nothing is hidden.** IOCs that are not enrichable stay in the chains and the table, with the reason.
+7. **Private and internal values never leave the machine.**
+8. **One background thread, one queue, one lookup at a time.** Easy to read, and it respects the portals' rate limits.
+9. **Tests make no network calls.** They use the sample dumps and saved portal answers as fixtures. Timeouts and `503`s are simulated.
 
-- Should the hash skip rule use signature data (Sysmon events 6 and 7) when a dump contains it? Dumps without it must still work, using path alone.
-- Is a sequential loop fast enough on real dumps? If not, parallel calls need Bed-e's approval. (One background thread for the M5 page is already approved. It does not make calls in parallel.)
-- Does the tool need a cache of its own, or are the portals' caches enough?
-- What is the per-run API cap?
-- How are the local score and the API scores combined into one ranking?
-- Where do the CDN and cloud range lists and the well-known-names list come from, and how are they kept up to date?
+## 11. Open questions
 
-## 11. Milestones
+- `ENUM_MIN_COUNT` and `ENUM_WINDOW_SECONDS` (proposed: 3 commands in 5 minutes).
+- Are the verdict bands (0 / 1–39 / 40+) right once real dumps are scored with findings?
+- Where do the CDN ranges and the well-known-names list come from, and how are they kept up to date?
+- Should signature data (Sysmon events 6 and 7) lower the trusted-path doubt when a dump has it?
 
-Each is done when its stated result works on the sample dumps used as test fixtures (section 3).
+## 12. Milestones
 
-- **M0 Design.** This file is reviewed and agreed.
-- **M1 Parse and collect.** The tool reads both `.evtx` files and prints counts of events (including registry events 12, 13, 14) and unique IPs, DNS names and hashes. Hashes come from event 1 only, one hash per file (sha256, then sha1, then md5). IPs come from event 3 only, not from DNS answers. Registry events are parsed and kept, not collected as IOCs. No API calls.
-- **M2 Filter and rank.** Each IOC has a skip reason or a local score with reasons, including the two persistence signals, with tests for every rule.
-- **M3 Enrich.** The tool queries the three portals one IOC at a time, highest score first, up to the cap, and shows failures as not enriched.
-- **M4 Storylines and static HTML.** One HTML report is written, with ranked process chains and the skipped-items table.
-- **M5 NiceGUI web app.** A dump uploaded in the browser gives the same data in tabs (Overview, IOCs, Storylines, Timeline, Skipped), with no API called until the analyst presses "Enrich next N" or a row's Look up button. Those IOCs are then looked up one at a time by a background thread, and the page fills in as answers arrive. No API is called until the analyst presses the button and picks N. Results fill in row by row, with a warning before sending and a hard daily stop for VirusTotal-backed hash lookups, using the limits in `data/api_limits.txt`.
-- **Later, only with approval.** Parallel calls, a cache of our own, other IOC types.
+Each milestone is on its own branch. Bed-e opens the pull requests.
+
+- **R0 Design.** This file.
+- **R1 Findings.** `scoring/` produces findings with kind and subject, adds the enumeration burst and per-process network findings, and builds `process_scores` once. Tests rewritten to findings.
+- **R2 Chains and IOC rank.** `storylines.py` builds chains (flagged trees, title finding, dropped-by, other activity). IOC rank uses split inheritance. `filters.py` returns the enrichability tag.
+- **R3 Web.** Queue and progress bar, Chains tab, IOCs reason column, Overview verdict, Stats tab. Remove Enrich next N, the warning dialog and the Skipped tab.
+- **R4 Cleanup.** Delete `main.py`, `report.py` and their tests; final pass on this file.

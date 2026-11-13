@@ -29,9 +29,12 @@ UPLOAD_ERRORS = {
 }
 
 UPLOAD_FORM = (
-    '<form method="post" action="/upload" enctype="multipart/form-data">'
-    '<input type="file" name="file" accept=".evtx"> '
-    '<button type="submit">Upload and rank</button></form>'
+    '<form class="upload-form" method="post" action="/upload" '
+    'enctype="multipart/form-data">'
+    '<label class="upload-drop">'
+    '<span class="upload-drop-title">Choose a Sysmon .evtx file</span>'
+    '<input type="file" name="file" accept=".evtx"></label>'
+    '<button class="upload-button" type="submit">Upload and rank</button></form>'
 )
 
 # The IOC table is a plain grid (so each row can hold a Look up button).
@@ -46,11 +49,6 @@ SKIPPED_COLUMNS = [
      "style": "white-space: normal; word-break: break-all"},
     {"name": "count", "label": "Sightings", "field": "count", "align": "left"},
 ]
-COUNT_COLUMNS = [
-    {"name": "item", "label": "Item", "field": "item", "align": "left"},
-    {"name": "value", "label": "Value", "field": "value", "align": "left"},
-]
-
 SUSPICIOUS_COLUMNS = [
     {"name": "time", "label": "First seen (UTC)", "field": "time", "align": "left"},
     {"name": "process", "label": "Process", "field": "process", "align": "left"},
