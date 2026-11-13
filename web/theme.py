@@ -93,8 +93,10 @@ body.body--dark .app-badge-flagged { background: #5a3d0a; color: #fbd38d; }
 body.body--dark .app-badge-high { background: #5c1f1a; color: #ffb4ab; }
 .ioc-head { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.04em; color: var(--app-muted); padding: 0.4rem 1rem 0.4rem 0;
-  border-bottom: 2px solid var(--app-border); }
-.ioc-cell { padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--app-border); }
+  border-bottom: 2px solid var(--app-border); display: flex; align-items: flex-end; }
+.ioc-cell { padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--app-border);
+  display: flex; flex-direction: column; justify-content: center; }
+.ioc-cell.ioc-row-cell { flex-direction: row; align-items: center; justify-content: flex-start; }
 .app-section { font-weight: 700; margin-top: 0.5rem; }
 .chain-card { padding: 0.25rem 0.75rem; }
 .verdict-label { font-size: 1.35rem; padding: 0.3rem 0.9rem; border-radius: 8px; }

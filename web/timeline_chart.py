@@ -2,7 +2,9 @@
 """
 
 from scoring.paths import file_name
-from web.config import EVENT_TYPE_COLORS, LABEL_WIDTH, ROWS_VISIBLE, SCORE_BARS
+from web.config import (EVENT_TYPE_COLORS, LABEL_WIDTH, NARROW_CHART,
+    NARROW_GRID_TOP, NARROW_LABEL_WIDTH, ROWS_VISIBLE, SCORE_BARS,
+    TIMELINE_COLORS)
 from web.timeline_data import (event_detail, event_lane, row_label,
     score_level, time_in_ms)
 
@@ -27,14 +29,22 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
       indentation shows (long names are cut with "...").
     Rows are placed by number, so two processes with the same name stay
     apart.
-    dark: True on a dark page; the text, axis lines, tooltip and the
-    parent-to-child lines then use light colours (ECharts ignores CSS, so the
-    colours are set here). Default False keeps the light-page output.
+    dark: True on a dark page; the text, axis lines, tooltip, sliders and the
+    parent-to-child lines then use the "dark" set of TIMELINE_COLORS (ECharts
+    draws on a canvas and ignores CSS, so every colour is set here). Default
+    False uses the "light" set.
+    The legend wraps onto a second line instead of scrolling, so every group
+    can be seen and clicked.
+    A "media" rule (worked out by ECharts in the browser, from the chart's
+    own width) narrows the name column to NARROW_LABEL_WIDTH when the chart
+    is under NARROW_CHART pixels wide, so a phone still has room for bars;
+    it also shrinks the legend and starts the rows at NARROW_GRID_TOP so the
+    legend's extra lines do not cover them.
     Used by: draw_process_timeline.
     """
-    text = "#d4d9e3" if dark else "#333333"
-    line = "#4a5568" if dark else "#cccccc"
-    link = "#a0aec0" if dark else "#555555"
+    colors = TIMELINE_COLORS["dark" if dark else "light"]
+    text = colors["text"]
+    line = colors["line"]
     index = {}
     labels = []
     for position, (guid, depth) in enumerate(rows):
@@ -50,12 +60,12 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
         process = process_scores.get(guid)
         score = process["score"] if process is not None else 0
         name = file_name(table[guid]["image"]) or "unknown process"
-        text = "%s  %s to %s" % (name, span["first_text"], span["last_text"])
+        hover = "%s  %s to %s" % (name, span["first_text"], span["last_text"])
         if score > 0:
-            text += "  (score %d)" % score
+            hover += "  (score %d)" % score
         bars[score_level(score)].append(
             {"coords": [[span["first"], position], [span["last"], position]],
-             "name": text})
+             "name": hover})
         parent = table[guid]["parent_guid"]
         if parent in index:
             parent_name = file_name(table[parent]["image"]) or "unknown process"
@@ -87,26 +97,40 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
                        "data": bars[level]})
     series.append({"name": "Parent → child", "type": "lines",
                    "coordinateSystem": "cartesian2d", "z": 2,
-                   "lineStyle": {"color": link, "width": 1.5, "type": "dashed"},
+                   "lineStyle": {"color": colors["link"], "width": 1.5,
+                                 "type": "dashed"},
                    "data": links})
     for lane, color in EVENT_TYPE_COLORS:
         series.append({"name": lane, "type": "scatter", "symbolSize": 7, "z": 3,
                        "itemStyle": {"color": color}, "data": dots[lane]})
 
-    zoom = [{"type": "slider", "xAxisIndex": 0, "bottom": 10,
-             "textStyle": {"color": text}, "borderColor": line},
+    # Shared look for both sliders (time along the bottom, rows on the right).
+    slider = {"type": "slider", "textStyle": {"color": text},
+              "borderColor": line, "backgroundColor": colors["slider_bg"],
+              "fillerColor": colors["slider_fill"],
+              "handleStyle": {"color": colors["handle"], "borderColor": line},
+              "moveHandleStyle": {"color": colors["slider_data"]},
+              "dataBackground": {"lineStyle": {"color": colors["slider_data"]},
+                                 "areaStyle": {"color": colors["slider_data"]}},
+              "selectedDataBackground": {
+                  "lineStyle": {"color": colors["slider_data"]},
+                  "areaStyle": {"color": colors["slider_data"]}}}
+    zoom = [dict(slider, xAxisIndex=0, bottom=10),
             {"type": "inside", "xAxisIndex": 0}]
     if len(rows) > ROWS_VISIBLE:
-        zoom.append({"type": "slider", "yAxisIndex": 0, "right": 5, "width": 14,
-                     "startValue": 0, "endValue": ROWS_VISIBLE - 1})
+        zoom.append(dict(slider, yAxisIndex=0, right=5, width=14,
+                         startValue=0, endValue=ROWS_VISIBLE - 1))
     return {
         "useUTC": True,
         "animation": False,
         "backgroundColor": "transparent",
         "textStyle": {"color": text},
-        "tooltip": {"trigger": "item", "formatter": "{b}"},
-        "legend": {"top": 0, "type": "scroll", "textStyle": {"color": text}},
-        "grid": {"left": LABEL_WIDTH, "right": 40, "top": 40, "bottom": 60},
+        "tooltip": {"trigger": "item", "formatter": "{b}",
+                    "backgroundColor": colors["tip_bg"],
+                    "borderColor": colors["tip_border"],
+                    "textStyle": {"color": text}},
+        "legend": {"top": 0, "textStyle": {"color": text}},
+        "grid": {"left": LABEL_WIDTH, "right": 40, "top": 64, "bottom": 60},
         "xAxis": {"type": "time", "axisLabel": {"color": text},
                   "axisLine": {"lineStyle": {"color": line}},
                   "splitLine": {"lineStyle": {"color": line}}},
@@ -117,4 +141,13 @@ def make_process_timeline(table, rows, spans, events, process_scores, dark=False
                                 "overflow": "truncate", "color": text}},
         "dataZoom": zoom,
         "series": series,
+        "media": [{"query": {"maxWidth": NARROW_CHART},
+                   "option": {"grid": {"left": NARROW_LABEL_WIDTH, "right": 25,
+                                       "top": NARROW_GRID_TOP},
+                              "legend": {"itemWidth": 12, "itemHeight": 8,
+                                         "itemGap": 6,
+                                         "textStyle": {"fontSize": 10}},
+                              "yAxis": {"axisLabel": {"fontSize": 10,
+                                  "margin": NARROW_LABEL_WIDTH - 10,
+                                  "width": NARROW_LABEL_WIDTH - 15}}}}],
     }

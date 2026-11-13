@@ -599,13 +599,48 @@ def test_ioc_action_same_rules_for_every_tab():
 
 
 def test_timeline_dark_option_uses_light_text():
+    # Real spans, so the bar loop runs: it once overwrote the text colour with
+    # the last bar's hover text.
     table = tl_table()
     rows = timeline_data.order_rows(table, set(table))
-    light = timeline_chart.make_process_timeline(table, rows, {}, [], {})
-    dark = timeline_chart.make_process_timeline(table, rows, {}, [], {}, dark=True)
-    assert light["textStyle"]["color"] != dark["textStyle"]["color"]
-    assert dark["legend"]["textStyle"]["color"] == dark["textStyle"]["color"]
-    assert dark["yAxis"]["axisLabel"]["color"] == dark["textStyle"]["color"]
+    spans = timeline_data.process_spans(TL_EVENTS)
+    for dark, key in [(False, "light"), (True, "dark")]:
+        option = timeline_chart.make_process_timeline(table, rows, spans, TL_EVENTS,
+                                                      TL_SCORES, dark=dark)
+        colors = config.TIMELINE_COLORS[key]
+        assert option["textStyle"]["color"] == colors["text"]
+        assert option["legend"]["textStyle"]["color"] == colors["text"]
+        assert option["yAxis"]["axisLabel"]["color"] == colors["text"]
+        assert option["xAxis"]["axisLabel"]["color"] == colors["text"]
+        assert option["tooltip"]["backgroundColor"] == colors["tip_bg"]
+        assert option["tooltip"]["textStyle"]["color"] == colors["text"]
+        assert option["dataZoom"][0]["backgroundColor"] == colors["slider_bg"]
+    assert "type" not in option["legend"]  # wraps instead of scrolling
+
+
+def test_timeline_narrows_name_column_on_small_charts():
+    table = tl_table()
+    option = timeline_chart.make_process_timeline(
+        table, timeline_data.order_rows(table, set(table)), {}, [], {})
+    assert option["grid"]["left"] == config.LABEL_WIDTH
+    [rule] = option["media"]
+    assert rule["query"] == {"maxWidth": config.NARROW_CHART}
+    assert rule["option"]["grid"]["left"] == config.NARROW_LABEL_WIDTH
+    assert rule["option"]["grid"]["top"] == config.NARROW_GRID_TOP
+    assert rule["option"]["yAxis"]["axisLabel"]["width"] < config.NARROW_LABEL_WIDTH
+
+
+def test_timeline_row_slider_is_themed():
+    table = {}
+    for i in range(config.ROWS_VISIBLE + 1):
+        table["g%d" % i] = {"image": "a.exe", "parent_guid": "", "time": "%03d" % i,
+                            "children": []}
+    option = timeline_chart.make_process_timeline(
+        table, timeline_data.order_rows(table, set(table)), {}, [], {}, dark=True)
+    row_slider = option["dataZoom"][-1]
+    assert row_slider["yAxisIndex"] == 0
+    assert row_slider["backgroundColor"] == config.TIMELINE_COLORS["dark"]["slider_bg"]
+    assert row_slider["handleStyle"]["color"] == config.TIMELINE_COLORS["dark"]["handle"]
 
 
 def test_resolve_dark():

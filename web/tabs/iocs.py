@@ -27,7 +27,7 @@ def build_ioc_rows(container, view, limit):
                          state["chains"]["table"])
     container.clear()
     with container:
-        with ui.grid().classes("w-full items-center text-sm") \
+        with ui.grid().classes("w-full items-stretch text-sm") \
                 .style("gap: 0; grid-template-columns: %s" % IOC_GRID_COLUMNS):
             for title in IOC_HEADERS:
                 ui.label(title).classes("ioc-head")
@@ -35,16 +35,16 @@ def build_ioc_rows(container, view, limit):
                 ui.label(str(row["rank"])).classes("ioc-cell")
                 ui.label(row["type"]).classes("ioc-cell")
                 ui.label(row["value"]).classes("ioc-cell break-all")
-                with ui.element("div").classes("ioc-cell"):
+                with ui.element("div").classes("ioc-cell ioc-row-cell"):
                     score_badge(row["score"])
                 with ui.column().classes("ioc-cell gap-0"):
                     for line in row["why"] or ["nothing flagged"]:
                         ui.label(line)
                     ui.tooltip(row["full_why"] or "no reasons") \
                         .classes("whitespace-pre-line text-sm")
-                with ui.label(row["seen_in"]).classes("ioc-cell break-all"):
+                with ui.label(row["seen_in"]).classes("ioc-cell break-words"):
                     ui.tooltip(row["seen_in_full"]).classes("whitespace-pre-line text-sm")
-                with ui.row().classes("ioc-cell items-center gap-2"):
+                with ui.row().classes("ioc-cell ioc-row-cell gap-2"):
                     portal = ui.label(row["portal"])
                     if row["not_enrichable"]:
                         portal.classes("app-muted")

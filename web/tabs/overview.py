@@ -45,13 +45,16 @@ def draw_top_chains(view, box):
         for number, chain in enumerate(chains["chains"][:TOP_CHAINS], 1):
             summary = summarize_chain(chains["table"], chain,
                                       state["process_scores"], details)
-            with ui.row().classes("items-center gap-3 no-wrap w-full"):
+            # The row may wrap: on a narrow screen the button drops under the
+            # text instead of squeezing the text and itself into a thin column.
+            with ui.row().classes("items-center gap-3 w-full"):
                 score_badge(chain["score"])
-                with ui.column().classes("gap-0 grow"):
+                with ui.column().classes("gap-0 grow basis-0 min-w-[12rem]"):
                     ui.label("#%d  ·  %s" % (number, chain_title(
                         chains["table"], chain["title_finding"]))).classes("font-bold")
                     ui.label(summary_caption(summary)).classes("app-muted")
                 ui.button("Show in Chains", on_click=show_chain_handler(view, number)) \
+                    .classes("whitespace-nowrap") \
                     .props("dense flat no-caps color=primary")
 
 
